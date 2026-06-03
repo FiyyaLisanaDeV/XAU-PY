@@ -1,5 +1,19 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import {
+  CandlestickSeries,
+  ColorType,
+  CrosshairMode,
+  LineSeries,
+  LineStyle,
+  createChart,
+  type CreatePriceLineOptions,
+  type IChartApi,
+  type IPriceLine,
+  type ISeriesApi,
+  type LineData,
+  type UTCTimestamp
+} from "lightweight-charts";
 import { Activity, AlertTriangle, CheckCircle2, ChevronDown, Layers, Maximize2, Minimize2, PlugZap, ShieldCheck, TrendingUp } from "lucide-react";
 import "./styles.css";
 
@@ -145,6 +159,7 @@ const defaultIndicators: Record<IndicatorKey, boolean> = {
   fib: true,
   live: true
 };
+const SCORE_BLOCK_REASON = "Confluence score below 60";
 
 function App() {
   const [symbol, setSymbol] = React.useState<SymbolName>("XAUUSD");
@@ -167,8 +182,7 @@ function App() {
 
   const refreshTicks = React.useCallback(async () => {
     const requestId = ++tickRequestId.current;
-    const tickRes = await fetch(`${API_BASE}/api/market/ticks`, { cache: "no-store" });
-    const nextTicks = (await tickRes.json()) as Partial<Record<SymbolName, MarketTick>>;
+    const nextTicks = await fetchJson<Partial<Record<SymbolName, MarketTick>>>(`${API_BASE}/api/market/ticks`, { cache: "no-store" });
     if (requestId === tickRequestId.current) {
       setTicks(nextTicks);
     }
@@ -176,38 +190,38 @@ function App() {
 
   const refresh = React.useCallback(async () => {
     const query = `symbol=${symbol}&timeframe=${timeframe}`;
-    const [statusRes, signalRes, historyRes, calendarRes, signalLogRes, activeSnapshotRes, watchResults] = await Promise.all([
-      fetch(`${API_BASE}/api/status`),
-      fetch(`${API_BASE}/api/signals?${query}&riskMode=${riskMode}&riskValue=${riskValue}`),
-      fetch(`${API_BASE}/api/history`),
-      fetch(`${API_BASE}/api/economic-calendar`, { cache: "no-store" }),
-      fetch(`${API_BASE}/api/signal-log?limit=80`, { cache: "no-store" }),
-      fetch(`${API_BASE}/api/market/snapshot?${query}`, { cache: "no-store" }),
+    const safeRiskValue = sanitizeRiskValue(riskValue);
+    const [nextStatus, nextSignal, nextHistory, nextCalendar, nextSignalLog, activeSnapshot, watchResults] = await Promise.all([
+      fetchJson<Status>(`${API_BASE}/api/status`),
+      fetchJson<Signal>(`${API_BASE}/api/signals?${query}&riskMode=${riskMode}&riskValue=${safeRiskValue}`),
+      fetchJson<HistoryItem[]>(`${API_BASE}/api/history`),
+      fetchJson<EconomicCalendarResponse>(`${API_BASE}/api/economic-calendar`, { cache: "no-store" }),
+      fetchJson<SignalLogEntry[]>(`${API_BASE}/api/signal-log?limit=80`, { cache: "no-store" }),
+      fetchJson<Snapshot>(`${API_BASE}/api/market/snapshot?${query}`, { cache: "no-store" }),
       Promise.all(
         symbols.map(async (item) => {
-          const res = await fetch(`${API_BASE}/api/market/snapshot?symbol=${item}&timeframe=${timeframe}`, { cache: "no-store" });
-          return [item, (await res.json()) as Snapshot] as const;
+          return [item, await fetchJson<Snapshot>(`${API_BASE}/api/market/snapshot?symbol=${item}&timeframe=${timeframe}`, { cache: "no-store" })] as const;
         })
       )
     ]);
     const nextWatchSnapshots = Object.fromEntries(watchResults) as Partial<Record<SymbolName, Snapshot>>;
-    setStatus(await statusRes.json());
+    setStatus(nextStatus);
     setWatchSnapshots(nextWatchSnapshots);
-    setSnapshot(await activeSnapshotRes.json());
-    setSignal(await signalRes.json());
-    setHistory(await historyRes.json());
-    setCalendar(await calendarRes.json());
-    setSignalLog(await signalLogRes.json());
+    setSnapshot(activeSnapshot);
+    setSignal(nextSignal);
+    setHistory(nextHistory);
+    setCalendar(nextCalendar);
+    setSignalLog(nextSignalLog);
     await refreshTicks();
   }, [refreshTicks, riskMode, riskValue, symbol, timeframe]);
 
   const scanPotentialSignals = React.useCallback(async () => {
-    await fetch(`${API_BASE}/api/signals/scan?riskMode=${riskMode}&riskValue=${riskValue}`, {
+    const safeRiskValue = sanitizeRiskValue(riskValue);
+    await fetchJson<Signal[]>(`${API_BASE}/api/signals/scan?riskMode=${riskMode}&riskValue=${safeRiskValue}`, {
       method: "POST",
       cache: "no-store"
     });
-    const signalLogRes = await fetch(`${API_BASE}/api/signal-log?limit=80`, { cache: "no-store" });
-    setSignalLog(await signalLogRes.json());
+    setSignalLog(await fetchJson<SignalLogEntry[]>(`${API_BASE}/api/signal-log?limit=80`, { cache: "no-store" }));
   }, [riskMode, riskValue]);
 
   React.useEffect(() => {
@@ -238,7 +252,23 @@ function App() {
   }, [scanPotentialSignals]);
 
   const mt5BlockedReason = status?.connected ? null : "MT5 is offline";
-  const executable = Boolean(status?.connected && signal && signal.blockedReasons.length === 0 && signal.orderType && signal.lot);
+  const scoreWarningReasons = signal?.blockedReasons.filter((reason) => reason === SCORE_BLOCK_REASON) ?? [];
+  const riskGuardReason = signal?.riskPercent !== null && signal?.riskPercent !== undefined && signal.riskPercent > 0.5 ? "Risk exceeds 0.5% maximum" : null;
+  const hardBlockedReasons = uniqueStrings([
+    ...(signal?.blockedReasons.filter((reason) => reason !== SCORE_BLOCK_REASON) ?? []),
+    ...(riskGuardReason ? [riskGuardReason] : []),
+    ...(mt5BlockedReason ? [mt5BlockedReason] : [])
+  ]);
+  const executable = Boolean(
+    status?.connected &&
+      signal?.side &&
+      signal.orderType &&
+      signal.entry &&
+      signal.stopLoss &&
+      signal.takeProfit &&
+      signal.lot &&
+      hardBlockedReasons.length === 0
+  );
   const executeLabel = signal?.orderType ? `Execute ${signal.orderType.replace("_", " ")}` : "No executable setup";
   const activeTick = ticks[symbol];
 
@@ -260,7 +290,7 @@ function App() {
         stopLoss: signal.stopLoss,
         takeProfit: signal.takeProfit,
         riskMode,
-        riskValue,
+        riskValue: sanitizeRiskValue(riskValue),
         lot: signal.lot,
         confirmed: true
       })
@@ -293,7 +323,8 @@ function App() {
           riskValue={riskValue}
           spreadPoints={activeTick?.spread_points ?? snapshot?.spread_points ?? null}
           symbol={symbol}
-          mt5BlockedReason={mt5BlockedReason}
+          hardBlockedReasons={hardBlockedReasons}
+          scoreWarningReasons={scoreWarningReasons}
           onRiskMode={setRiskMode}
           onRiskValue={setRiskValue}
           executable={executable}
@@ -308,6 +339,7 @@ function App() {
         <ConfirmModal
           signal={signal}
           spread={snapshot.spread_points}
+          scoreWarningReasons={scoreWarningReasons}
           onCancel={() => setConfirmOpen(false)}
           onConfirm={confirmExecute}
         />
@@ -501,130 +533,134 @@ function CandlestickChart({
   tick: MarketTick | undefined;
   indicators: Record<IndicatorKey, boolean>;
 }) {
-  const [hoverIndex, setHoverIndex] = React.useState<number | null>(null);
-  const candles = snapshot?.candles.slice(-64) ?? [];
-  if (!snapshot || candles.length === 0) return <div className="chart-empty">Waiting for market data</div>;
-  const highs = candles.map((c) => c.high);
-  const lows = candles.map((c) => c.low);
-  const livePrice = tick?.mid ?? (snapshot.bid + snapshot.ask) / 2;
-  const max = Math.max(...highs, livePrice);
-  const min = Math.min(...lows, livePrice);
-  const height = 310;
-  const width = 680;
-  const y = (price: number) => height - ((price - min) / (max - min || 1)) * height;
-  const step = width / candles.length;
-  const hovered = hoverIndex !== null ? candles[hoverIndex] : candles[candles.length - 1];
-  const hoverX = hoverIndex !== null ? hoverIndex * step + step / 2 : width - step / 2;
-  const priceLevels = [max, max - (max - min) * 0.25, max - (max - min) * 0.5, max - (max - min) * 0.75, min];
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const chartRef = React.useRef<IChartApi | null>(null);
+  const candleSeriesRef = React.useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const emaFastRef = React.useRef<ISeriesApi<"Line"> | null>(null);
+  const emaSlowRef = React.useRef<ISeriesApi<"Line"> | null>(null);
+  const maFastRef = React.useRef<ISeriesApi<"Line"> | null>(null);
+  const maSlowRef = React.useRef<ISeriesApi<"Line"> | null>(null);
+  const priceLineRefs = React.useRef<IPriceLine[]>([]);
+  const candles = React.useMemo(() => snapshot?.candles.slice(-160) ?? [], [snapshot?.candles]);
+  const livePrice = snapshot ? (tick?.mid ?? (snapshot.bid + snapshot.ask) / 2) : null;
+  const latest = candles[candles.length - 1];
 
-  function onPointerMove(event: React.PointerEvent<SVGSVGElement>) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const x = ((event.clientX - rect.left) / rect.width) * width;
-    const index = Math.max(0, Math.min(candles.length - 1, Math.round((x - step / 2) / step)));
-    setHoverIndex(index);
-  }
+  React.useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const chart = createChart(container, {
+      width: container.clientWidth || 640,
+      height: 360,
+      layout: {
+        background: { type: ColorType.Solid, color: "#ffffff" },
+        textColor: "#64748b"
+      },
+      grid: {
+        vertLines: { color: "#edf2f7" },
+        horzLines: { color: "#edf2f7" }
+      },
+      crosshair: {
+        mode: CrosshairMode.Normal
+      },
+      rightPriceScale: {
+        borderColor: "#dfe5ec",
+        scaleMargins: {
+          top: 0.12,
+          bottom: 0.12
+        }
+      },
+      timeScale: {
+        borderColor: "#dfe5ec",
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 14,
+        barSpacing: 7
+      },
+      localization: {
+        priceFormatter: (value: number) => formatPrice(value)
+      }
+    });
+
+    chartRef.current = chart;
+    candleSeriesRef.current = chart.addSeries(CandlestickSeries, {
+      upColor: "#14b8a6",
+      downColor: "#ef4444",
+      borderUpColor: "#0f766e",
+      borderDownColor: "#b91c1c",
+      wickUpColor: "#0f766e",
+      wickDownColor: "#b91c1c",
+      priceLineVisible: false
+    });
+    emaFastRef.current = chart.addSeries(LineSeries, { color: "#b7791f", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+    emaSlowRef.current = chart.addSeries(LineSeries, { color: "#2563eb", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+    maFastRef.current = chart.addSeries(LineSeries, { color: "#7c3aed", lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false });
+    maSlowRef.current = chart.addSeries(LineSeries, { color: "#0f172a", lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false });
+
+    const resizeObserver = new ResizeObserver(() => {
+      chart.applyOptions({
+        width: container.clientWidth,
+        height: Math.max(360, Math.round(container.clientHeight || 360))
+      });
+    });
+    resizeObserver.observe(container);
+
+    return () => {
+      resizeObserver.disconnect();
+      chart.remove();
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+      emaFastRef.current = null;
+      emaSlowRef.current = null;
+      maFastRef.current = null;
+      maSlowRef.current = null;
+      priceLineRefs.current = [];
+    };
+  }, [candles.length, snapshot?.symbol, snapshot?.timeframe]);
+
+  React.useEffect(() => {
+    const chart = chartRef.current;
+    const candleSeries = candleSeriesRef.current;
+    if (!chart || !candleSeries || !snapshot || candles.length === 0) return;
+
+    const candleData = uniqueByTime(
+      candles.map((candle) => ({
+        time: toChartTimestamp(candle.time),
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close
+      }))
+    );
+
+    candleSeries.setData(candleData);
+    emaFastRef.current?.setData(indicators.ema ? lineDataFromIndicator(candles, snapshot.indicators.ema_fast) : []);
+    emaSlowRef.current?.setData(indicators.ema ? lineDataFromIndicator(candles, snapshot.indicators.ema_slow) : []);
+    maFastRef.current?.setData(indicators.ma ? lineDataFromIndicator(candles, snapshot.indicators.ma_fast) : []);
+    maSlowRef.current?.setData(indicators.ma ? lineDataFromIndicator(candles, snapshot.indicators.ma_slow) : []);
+
+    for (const priceLine of priceLineRefs.current) {
+      candleSeries.removePriceLine(priceLine);
+    }
+    priceLineRefs.current = buildPriceLines(snapshot, indicators, livePrice).map((line) => candleSeries.createPriceLine(line));
+
+    chart.timeScale().fitContent();
+    chart.timeScale().applyOptions({ rightOffset: 14 });
+  }, [candles, indicators, livePrice, snapshot]);
+
+  if (!snapshot || candles.length === 0) return <div className="chart-empty">Waiting for market data</div>;
 
   return (
     <div className="chart-wrap">
-      <svg
-        className="chart"
-        viewBox={`0 0 ${width} ${height}`}
-        role="img"
-        aria-label={`${snapshot.symbol} candlestick chart`}
-        onPointerMove={onPointerMove}
-        onPointerLeave={() => setHoverIndex(null)}
-      >
-        {priceLevels.map((price) => (
-          <g key={price}>
-            <line x1="0" x2={width} y1={y(price)} y2={y(price)} className="grid-line" />
-            <text x={width - 4} y={y(price) - 4} className="price-axis">
-              {formatPrice(price)}
-            </text>
-          </g>
-        ))}
-        {indicators.supportResistance &&
-          snapshot.zones
-            .filter((zone) => zone.kind === "SNR")
-            .slice(0, 3)
-            .map((zone) => (
-              <g key={`${zone.kind}-${zone.label}`}>
-                <rect x="0" width={width} y={y(zone.high)} height={Math.max(5, y(zone.low) - y(zone.high))} className={`zone zone-${zone.kind.toLowerCase()}`} />
-                <text x="8" y={y(zone.high) + 13} className="zone-label">
-                  S/R {zone.strength}/5
-                </text>
-              </g>
-            ))}
-        {indicators.supplyDemand &&
-          snapshot.zones
-            .filter((zone) => zone.kind === "SND")
-            .slice(0, 3)
-            .map((zone) => (
-              <g key={`${zone.kind}-${zone.label}`}>
-                <rect x="0" width={width} y={y(zone.high)} height={Math.max(5, y(zone.low) - y(zone.high))} className={`zone zone-${zone.kind.toLowerCase()}`} />
-                <text x="8" y={y(zone.high) + 13} className="zone-label snd-label">
-                  S/D {zone.strength}/5
-                </text>
-              </g>
-            ))}
-        {indicators.fib &&
-          snapshot.zones
-            .filter((zone) => zone.kind === "FIB")
-            .map((zone) => (
-              <g key={`${zone.kind}-${zone.label}`}>
-                <rect x="0" width={width} y={y(zone.high)} height={Math.max(5, y(zone.low) - y(zone.high))} className="zone zone-fib" />
-                <text x="8" y={y(zone.high) + 13} className="zone-label fib-label">
-                  Fib 61.8
-                </text>
-              </g>
-            ))}
-        {candles.map((candle, idx) => {
-          const x = idx * step + step / 2;
-          const bullish = candle.close >= candle.open;
-          const bodyTop = y(Math.max(candle.open, candle.close));
-          const bodyHeight = Math.max(2, Math.abs(y(candle.open) - y(candle.close)));
-          return (
-            <g key={`${candle.time}-${idx}`} className={bullish ? "candle bullish" : "candle bearish"}>
-              <line x1={x} x2={x} y1={y(candle.high)} y2={y(candle.low)} />
-              <rect x={x - 3.2} y={bodyTop} width="6.4" height={bodyHeight} rx="1.2" />
-            </g>
-          );
-        })}
-        {indicators.ema ? (
-          <>
-            <PathLine values={snapshot.indicators.ema_fast.slice(-64)} min={min} max={max} width={width} height={height} className="ema-fast" />
-            <PathLine values={snapshot.indicators.ema_slow.slice(-64)} min={min} max={max} width={width} height={height} className="ema-slow" />
-          </>
-        ) : null}
-        {indicators.ma ? (
-          <>
-            <PathLine values={snapshot.indicators.ma_fast.slice(-64)} min={min} max={max} width={width} height={height} className="ma-fast" />
-            <PathLine values={snapshot.indicators.ma_slow.slice(-64)} min={min} max={max} width={width} height={height} className="ma-slow" />
-          </>
-        ) : null}
-        {indicators.live ? (
-          <g>
-            <line x1="0" x2={width} y1={y(livePrice)} y2={y(livePrice)} className="live-price-line" />
-            <text x={width - 94} y={Math.max(14, y(livePrice) - 7)} className="live-price-label">
-              Live {formatPrice(livePrice)}
-            </text>
-          </g>
-        ) : null}
-        {hovered ? (
-          <g className="crosshair">
-            <line x1={hoverX} x2={hoverX} y1="0" y2={height} />
-            <line x1="0" x2={width} y1={y(hovered.close)} y2={y(hovered.close)} />
-          </g>
-        ) : null}
-      </svg>
-      {hovered ? (
-        <div className="chart-tooltip">
-          <strong>{formatDateLabel(hovered.time)}</strong>
-          <span>O {formatPrice(hovered.open)}</span>
-          <span>H {formatPrice(hovered.high)}</span>
-          <span>L {formatPrice(hovered.low)}</span>
-          <span>C {formatPrice(hovered.close)}</span>
-        </div>
-      ) : null}
+      <div ref={containerRef} className="chart lightweight-chart" role="img" aria-label={`${snapshot.symbol} TradingView lightweight candlestick chart`} />
+      <div className="chart-status-strip">
+        <strong>{formatDateLabel(latest.time)}</strong>
+        <span>O {formatPrice(latest.open)}</span>
+        <span>H {formatPrice(latest.high)}</span>
+        <span>L {formatPrice(latest.low)}</span>
+        <span>C {formatPrice(latest.close)}</span>
+        <span>Live {formatPrice(livePrice)}</span>
+      </div>
       <div className="legend-row">
         {indicators.ema ? <span className="legend-item ema">EMA 21/55</span> : null}
         {indicators.ma ? <span className="legend-item ma">MA 20/50</span> : null}
@@ -636,16 +672,94 @@ function CandlestickChart({
   );
 }
 
-function PathLine({ values, min, max, width, height, className }: { values: number[]; min: number; max: number; width: number; height: number; className: string }) {
-  const step = width / values.length;
-  const points = values
-    .map((value, idx) => {
-      const x = idx * step + step / 2;
-      const y = height - ((value - min) / (max - min || 1)) * height;
-      return `${x},${y}`;
-    })
-    .join(" ");
-  return <polyline className={className} points={points} fill="none" />;
+function toChartTimestamp(value: string): UTCTimestamp {
+  const parsed = new Date(value).getTime();
+  const seconds = Number.isFinite(parsed) ? Math.floor(parsed / 1000) : Math.floor(Date.now() / 1000);
+  return seconds as UTCTimestamp;
+}
+
+function uniqueByTime<T extends { time: UTCTimestamp }>(data: T[]): T[] {
+  const seen = new Set<number>();
+  const unique: T[] = [];
+  for (const item of data) {
+    const key = item.time as number;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(item);
+  }
+  return unique.sort((a, b) => (a.time as number) - (b.time as number));
+}
+
+function lineDataFromIndicator(candles: Candle[], values: number[]): LineData[] {
+  const alignedValues = values.slice(-candles.length);
+  const data: Array<{ time: UTCTimestamp; value: number }> = [];
+  candles.forEach((candle, index) => {
+    const value = alignedValues[index];
+    if (Number.isFinite(value)) {
+      data.push({
+        time: toChartTimestamp(candle.time),
+        value
+      });
+    }
+  });
+  return uniqueByTime(data);
+}
+
+function buildPriceLines(snapshot: Snapshot, indicators: Record<IndicatorKey, boolean>, livePrice: number | null): CreatePriceLineOptions[] {
+  const lines: CreatePriceLineOptions[] = [];
+  const addZone = (zone: Snapshot["zones"][number], color: string, title: string) => {
+    lines.push(
+      {
+        price: zone.high,
+        color,
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: false,
+        title: `${title} high`
+      },
+      {
+        price: zone.low,
+        color,
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: false,
+        title: `${title} low`
+      }
+    );
+  };
+
+  if (indicators.supportResistance) {
+    snapshot.zones
+      .filter((zone) => zone.kind === "SNR")
+      .slice(0, 3)
+      .forEach((zone) => addZone(zone, "#0f766e", `S/R ${zone.strength}/5`));
+  }
+
+  if (indicators.supplyDemand) {
+    snapshot.zones
+      .filter((zone) => zone.kind === "SND")
+      .slice(0, 3)
+      .forEach((zone) => addZone(zone, "#b45309", `S/D ${zone.strength}/5`));
+  }
+
+  if (indicators.fib) {
+    snapshot.zones
+      .filter((zone) => zone.kind === "FIB")
+      .forEach((zone) => addZone(zone, "#2563eb", "Fib 61.8"));
+  }
+
+  if (indicators.live && livePrice !== null) {
+    lines.push({
+      price: livePrice,
+      color: "#dc2626",
+      lineWidth: 2,
+      lineStyle: LineStyle.Dashed,
+      axisLabelVisible: true,
+      title: "Live"
+    });
+  }
+
+  return lines;
 }
 
 function ChartInsights({ snapshot, tick }: { snapshot: Snapshot | null; tick: MarketTick | undefined }) {
@@ -720,7 +834,8 @@ function SignalPanel({
   riskValue,
   spreadPoints,
   symbol,
-  mt5BlockedReason,
+  hardBlockedReasons,
+  scoreWarningReasons,
   onRiskMode,
   onRiskValue,
   executable,
@@ -732,14 +847,15 @@ function SignalPanel({
   riskValue: number;
   spreadPoints: number | null;
   symbol: SymbolName;
-  mt5BlockedReason: string | null;
+  hardBlockedReasons: string[];
+  scoreWarningReasons: string[];
   onRiskMode: (mode: RiskMode) => void;
   onRiskValue: (value: number) => void;
   executable: boolean;
   executeLabel: string;
   onExecute: () => void;
 }) {
-  const blocked = [...(signal?.blockedReasons ?? []), ...(mt5BlockedReason ? [mt5BlockedReason] : [])];
+  const blocked = [...scoreWarningReasons, ...hardBlockedReasons];
   return (
     <aside className="signal-panel">
       <div className="panel-title">Signal workspace</div>
@@ -778,7 +894,18 @@ function SignalPanel({
             %
           </button>
         </div>
-        <input type="number" min="0.01" step="0.01" value={riskValue} onChange={(event) => onRiskValue(Number(event.target.value))} />
+        <input
+          type="number"
+          min="0.01"
+          step="0.01"
+          value={riskValue}
+          onChange={(event) => {
+            const nextValue = Number(event.target.value);
+            if (Number.isFinite(nextValue) && nextValue > 0) {
+              onRiskValue(nextValue);
+            }
+          }}
+        />
       </div>
       {blocked.length > 0 && (
         <div className="blocked-box">
@@ -788,11 +915,11 @@ function SignalPanel({
         </div>
       )}
       {executable ? (
-        <button className="execute-button" onClick={onExecute}>
+        <button className={`execute-button ${scoreWarningReasons.length > 0 ? "warning" : ""}`} onClick={onExecute}>
           {executeLabel}
         </button>
       ) : (
-        <div className="no-execute">No executable order until signal and risk checks pass.</div>
+        <div className="no-execute">No executable order until MT5, order levels, spread, and risk checks pass.</div>
       )}
       <p className="fine-print">One relevant action only. Confirmation modal is required before MT5 order send.</p>
     </aside>
@@ -806,6 +933,22 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: s
       <strong>{value}</strong>
     </div>
   );
+}
+
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    throw new Error(`Request failed ${response.status}: ${url}`);
+  }
+  return (await response.json()) as T;
+}
+
+function sanitizeRiskValue(value: number) {
+  return Number.isFinite(value) && value > 0 ? value : 0.01;
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values));
 }
 
 function HistoryTable({ items }: { items: HistoryItem[] }) {
@@ -954,12 +1097,38 @@ function EconomicCalendarBox({ calendar, activeSymbol }: { calendar: EconomicCal
   );
 }
 
-function ConfirmModal({ signal, spread, onCancel, onConfirm }: { signal: Signal; spread: number; onCancel: () => void; onConfirm: () => void }) {
+function ConfirmModal({
+  signal,
+  spread,
+  scoreWarningReasons,
+  onCancel,
+  onConfirm
+}: {
+  signal: Signal;
+  spread: number;
+  scoreWarningReasons: string[];
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const hasScoreWarning = scoreWarningReasons.length > 0;
   return (
     <div className="modal-backdrop">
       <section className="modal">
         <h2>Confirm MT5 execution</h2>
-        <p>Review the single recommended order before sending it to the connected demo terminal.</p>
+        <p>
+          {hasScoreWarning
+            ? "Score setup belum mendukung filter strategi. Review detail order dan konfirmasi hanya jika tetap ingin eksekusi manual ke demo terminal."
+            : "Review the single recommended order before sending it to the connected demo terminal."}
+        </p>
+        {hasScoreWarning ? (
+          <div className="execution-warning">
+            <strong>Low-score execution warning</strong>
+            <span>Confluence score saat ini {signal.score}, di bawah minimum strategi 60.</span>
+            {scoreWarningReasons.map((reason) => (
+              <span key={reason}>{reason}</span>
+            ))}
+          </div>
+        ) : null}
         <div className="confirm-grid">
           <Metric label="Symbol" value={signal.symbol} />
           <Metric label="Order" value={signal.orderType?.replace("_", " ") ?? "--"} />
@@ -968,12 +1137,13 @@ function ConfirmModal({ signal, spread, onCancel, onConfirm }: { signal: Signal;
           <Metric label="SL" value={formatPrice(signal.stopLoss)} />
           <Metric label="TP" value={formatPrice(signal.takeProfit)} />
           <Metric label="Risk" value={`${signal.riskPercent ?? 0}%`} />
+          <Metric label="Score" value={`${signal.score}/100`} />
           <Metric label="Spread" value={`${spread} pts`} />
         </div>
         <div className="modal-actions">
           <button onClick={onCancel}>Cancel</button>
-          <button className="confirm-button" onClick={onConfirm}>
-            Confirm Execute
+          <button className={`confirm-button ${hasScoreWarning ? "warning" : ""}`} onClick={onConfirm}>
+            {hasScoreWarning ? "Confirm Execute Anyway" : "Confirm Execute"}
           </button>
         </div>
       </section>
