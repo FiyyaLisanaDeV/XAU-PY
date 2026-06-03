@@ -14,7 +14,7 @@ import {
   type LineData,
   type UTCTimestamp
 } from "lightweight-charts";
-import { Activity, AlertTriangle, CheckCircle2, ChevronDown, Layers, Maximize2, Minimize2, PlugZap, ShieldCheck, TrendingUp } from "lucide-react";
+import { Activity, AlertTriangle, BookOpen, CheckCircle2, ChevronDown, Layers, Maximize2, Minimize2, PlugZap, ShieldCheck, TrendingUp, XCircle } from "lucide-react";
 import "./styles.css";
 
 type SymbolName = "XAUUSD" | "GBPUSD" | "EURUSD";
@@ -62,12 +62,22 @@ interface MarketTick {
 interface Status {
   connected: boolean;
   demo_mode: boolean;
+  demo_guard_enabled: boolean;
+  live_account: boolean;
+  terminal_trade_allowed: boolean;
+  account_trade_allowed: boolean;
+  trade_ready: boolean;
   terminal_found: boolean;
   account_login: number | null;
   server: string | null;
   equity: number;
   balance: number;
   currency: string;
+  message: string;
+}
+
+interface DemoGuardStatus {
+  enabled: boolean;
   message: string;
 }
 
@@ -81,7 +91,7 @@ interface Signal {
   takeProfit: number | null;
   lot: number | null;
   riskMode: RiskMode;
-  riskValue: number;
+  riskValue: string;
   riskPercent: number | null;
   score: number;
   setupType: string;
@@ -96,6 +106,63 @@ interface HistoryItem {
   score: number;
   action: string;
   status: string;
+}
+
+interface OpenPosition {
+  ticket: number;
+  symbol: SymbolName;
+  broker_symbol: string;
+  side: "BUY" | "SELL";
+  volume: number;
+  open_price: number;
+  current_price: number;
+  stopLoss: number | null;
+  takeProfit: number | null;
+  profit: number;
+  swap: number;
+  commission: number;
+  opened_at: string;
+  comment: string | null;
+}
+
+interface ClosePositionResponse {
+  accepted: boolean;
+  ticket: number | null;
+  status: "closed" | "blocked";
+  message: string;
+  closedCount: number;
+  failedCount: number;
+  results: Array<{ accepted: boolean; ticket: number | null; symbol: SymbolName | null; message: string }>;
+}
+
+interface TrailingStopResponse {
+  accepted: boolean;
+  ticket: number;
+  status: "updated" | "blocked";
+  message: string;
+  oldStopLoss: number | null;
+  newStopLoss: number | null;
+  profitPips: number | null;
+}
+
+interface TrailingRules {
+  triggerPips: string;
+  distancePips: string;
+  stepPips: string;
+}
+
+interface TradingJournalEntry {
+  time: string;
+  ticket: number | null;
+  symbol: SymbolName;
+  side: "BUY" | "SELL" | null;
+  volume: number | null;
+  entry: number | null;
+  exit: number | null;
+  profit: number | null;
+  closeReason: "tp" | "sl" | "force_close_user" | "manual_external" | "unknown";
+  source: "app" | "mt5";
+  note: string;
 }
 
 interface EconomicEvent {
@@ -165,7 +232,7 @@ function App() {
   const [symbol, setSymbol] = React.useState<SymbolName>("XAUUSD");
   const [timeframe, setTimeframe] = React.useState<Timeframe>("H1");
   const [riskMode, setRiskMode] = React.useState<RiskMode>("percent_equity");
-  const [riskValue, setRiskValue] = React.useState(0.5);
+  const [riskValue, setRiskValue] = React.useState("0.5");
   const [status, setStatus] = React.useState<Status | null>(null);
   const [snapshot, setSnapshot] = React.useState<Snapshot | null>(null);
   const [watchSnapshots, setWatchSnapshots] = React.useState<Partial<Record<SymbolName, Snapshot>>>({});
@@ -174,6 +241,9 @@ function App() {
   const [priceContextFullscreen, setPriceContextFullscreen] = React.useState(false);
   const [signal, setSignal] = React.useState<Signal | null>(null);
   const [history, setHistory] = React.useState<HistoryItem[]>([]);
+  const [positions, setPositions] = React.useState<OpenPosition[]>([]);
+  const [journal, setJournal] = React.useState<TradingJournalEntry[]>([]);
+  const [trailingRules, setTrailingRules] = React.useState<TrailingRules>({ triggerPips: "5", distancePips: "3", stepPips: "1" });
   const [calendar, setCalendar] = React.useState<EconomicCalendarResponse | null>(null);
   const [signalLog, setSignalLog] = React.useState<SignalLogEntry[]>([]);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
@@ -191,10 +261,12 @@ function App() {
   const refresh = React.useCallback(async () => {
     const query = `symbol=${symbol}&timeframe=${timeframe}`;
     const safeRiskValue = sanitizeRiskValue(riskValue);
-    const [nextStatus, nextSignal, nextHistory, nextCalendar, nextSignalLog, activeSnapshot, watchResults] = await Promise.all([
+    const [nextStatus, nextSignal, nextHistory, nextPositions, nextJournal, nextCalendar, nextSignalLog, activeSnapshot, watchResults] = await Promise.all([
       fetchJson<Status>(`${API_BASE}/api/status`),
       fetchJson<Signal>(`${API_BASE}/api/signals?${query}&riskMode=${riskMode}&riskValue=${safeRiskValue}`),
       fetchJson<HistoryItem[]>(`${API_BASE}/api/history`),
+      fetchJson<OpenPosition[]>(`${API_BASE}/api/positions`, { cache: "no-store" }),
+      fetchJson<TradingJournalEntry[]>(`${API_BASE}/api/journal`, { cache: "no-store" }),
       fetchJson<EconomicCalendarResponse>(`${API_BASE}/api/economic-calendar`, { cache: "no-store" }),
       fetchJson<SignalLogEntry[]>(`${API_BASE}/api/signal-log?limit=80`, { cache: "no-store" }),
       fetchJson<Snapshot>(`${API_BASE}/api/market/snapshot?${query}`, { cache: "no-store" }),
@@ -210,6 +282,8 @@ function App() {
     setSnapshot(activeSnapshot);
     setSignal(nextSignal);
     setHistory(nextHistory);
+    setPositions(nextPositions);
+    setJournal(nextJournal);
     setCalendar(nextCalendar);
     setSignalLog(nextSignalLog);
     await refreshTicks();
@@ -252,11 +326,20 @@ function App() {
   }, [scanPotentialSignals]);
 
   const mt5BlockedReason = status?.connected ? null : "MT5 is offline";
+  const tradeBlockedReason =
+    status?.connected && !status.trade_ready ? "MT5 AutoTrading/Algo Trading is disabled in the terminal" : null;
+  const demoGuardBlockedReason = status?.connected && status.demo_guard_enabled && status.live_account ? "Demo guard blocks non-demo account execution" : null;
+  const demoGuardOffWarning = status?.demo_guard_enabled === false ? "Demo guard is OFF; the app will not block non-demo account execution." : null;
   const scoreWarningReasons = signal?.blockedReasons.filter((reason) => reason === SCORE_BLOCK_REASON) ?? [];
+  const parsedRiskValue = sanitizeRiskValue(riskValue);
+  const invalidRiskInputReason = parseRiskValue(riskValue) === null ? "Risk value must be a positive number" : null;
   const riskGuardReason = signal?.riskPercent !== null && signal?.riskPercent !== undefined && signal.riskPercent > 0.5 ? "Risk exceeds 0.5% maximum" : null;
   const hardBlockedReasons = uniqueStrings([
     ...(signal?.blockedReasons.filter((reason) => reason !== SCORE_BLOCK_REASON) ?? []),
+    ...(invalidRiskInputReason ? [invalidRiskInputReason] : []),
     ...(riskGuardReason ? [riskGuardReason] : []),
+    ...(tradeBlockedReason ? [tradeBlockedReason] : []),
+    ...(demoGuardBlockedReason ? [demoGuardBlockedReason] : []),
     ...(mt5BlockedReason ? [mt5BlockedReason] : [])
   ]);
   const executable = Boolean(
@@ -290,7 +373,7 @@ function App() {
         stopLoss: signal.stopLoss,
         takeProfit: signal.takeProfit,
         riskMode,
-        riskValue: sanitizeRiskValue(riskValue),
+        riskValue: parsedRiskValue,
         lot: signal.lot,
         confirmed: true
       })
@@ -301,9 +384,56 @@ function App() {
     refresh().catch(() => undefined);
   }
 
+  async function toggleDemoGuard(enabled: boolean) {
+    const payload = await fetchJson<DemoGuardStatus>(`${API_BASE}/api/demo-guard`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled })
+    });
+    setToast(payload.message);
+    refresh().catch(() => undefined);
+  }
+
+  async function closePosition(payload: { ticket?: number; symbol?: SymbolName; all?: boolean }) {
+    const target = payload.all ? "ALL open positions" : payload.ticket ? `ticket ${payload.ticket}` : payload.symbol ? `one ${payload.symbol} position` : "position";
+    if (!window.confirm(`Close ${target} now?`)) return;
+    const response = await fetchJson<ClosePositionResponse>(`${API_BASE}/api/positions/close`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, confirmed: true })
+    });
+    setToast(response.message);
+    refresh().catch(() => undefined);
+  }
+
+  async function applyTrailingStop(ticket: number) {
+    const triggerPips = parseRiskValue(trailingRules.triggerPips);
+    const distancePips = parseRiskValue(trailingRules.distancePips);
+    const stepPips = parseRiskValue(trailingRules.stepPips);
+    if (triggerPips === null || distancePips === null || stepPips === null) {
+      setToast("Trailing rules must be positive pip values.");
+      return;
+    }
+    const response = await fetchJson<TrailingStopResponse>(`${API_BASE}/api/positions/trailing-stop`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ticket, trigger_pips: triggerPips, distance_pips: distancePips, step_pips: stepPips, confirmed: true })
+    });
+    setToast(response.message);
+    refresh().catch(() => undefined);
+  }
+
   return (
     <main className="app-shell">
-      <TopBar status={status} symbol={symbol} timeframe={timeframe} onSymbol={setSymbol} onTimeframe={setTimeframe} onRefresh={refresh} />
+      <TopBar
+        status={status}
+        symbol={symbol}
+        timeframe={timeframe}
+        onSymbol={setSymbol}
+        onTimeframe={setTimeframe}
+        onRefresh={refresh}
+        onDemoGuard={toggleDemoGuard}
+      />
       <section className="workspace">
         <Watchlist active={symbol} snapshots={watchSnapshots} ticks={ticks} onSelect={setSymbol} />
         <section className={`chart-stage ${priceContextFullscreen ? "fullscreen" : ""}`}>
@@ -332,6 +462,17 @@ function App() {
           onExecute={() => setConfirmOpen(true)}
         />
       </section>
+      <PositionCard
+        positions={positions}
+        journal={journal}
+        activeSymbol={symbol}
+        trailingRules={trailingRules}
+        onTrailingRules={setTrailingRules}
+        onApplyTrailing={applyTrailingStop}
+        onCloseAll={() => closePosition({ all: true })}
+        onCloseTicket={(ticket) => closePosition({ ticket })}
+        onCloseSymbol={(item) => closePosition({ symbol: item })}
+      />
       <HistoryTable items={history} />
       <SignalLogTable items={signalLog} />
       <EconomicCalendarBox calendar={calendar} activeSymbol={symbol} />
@@ -340,6 +481,8 @@ function App() {
           signal={signal}
           spread={snapshot.spread_points}
           scoreWarningReasons={scoreWarningReasons}
+          demoGuardOffWarning={demoGuardOffWarning}
+          accountLabel={status?.demo_mode ? "Demo account" : status?.live_account ? "Non-demo account" : "Account unknown"}
           onCancel={() => setConfirmOpen(false)}
           onConfirm={confirmExecute}
         />
@@ -359,7 +502,8 @@ function TopBar({
   timeframe,
   onSymbol,
   onTimeframe,
-  onRefresh
+  onRefresh,
+  onDemoGuard
 }: {
   status: Status | null;
   symbol: SymbolName;
@@ -367,7 +511,11 @@ function TopBar({
   onSymbol: (value: SymbolName) => void;
   onTimeframe: (value: Timeframe) => void;
   onRefresh: () => void;
+  onDemoGuard: (enabled: boolean) => void;
 }) {
+  const guardEnabled = status?.demo_guard_enabled ?? true;
+  const accountLabel = status?.connected ? (status.demo_mode ? "Demo account" : "Non-demo account") : "Account pending";
+  const tradeLabel = status?.connected ? (status.trade_ready ? "Trading enabled" : "AutoTrading OFF") : "Trading pending";
   return (
     <header className="topbar">
       <div className="brand">
@@ -383,10 +531,16 @@ function TopBar({
         <PlugZap size={16} />
         <span>{status?.connected ? "MT5 Connected" : "MT5 Offline"}</span>
       </div>
-      <div className="demo-chip">
+      <button
+        className={`demo-chip ${guardEnabled ? "active" : "off"}`}
+        onClick={() => onDemoGuard(!guardEnabled)}
+        title={guardEnabled ? "Turn demo guard OFF" : "Turn demo guard ON"}
+      >
         <ShieldCheck size={15} />
-        Demo first
-      </div>
+        <span>Demo guard {guardEnabled ? "ON" : "OFF"}</span>
+      </button>
+      <div className={`account-chip ${status?.demo_mode ? "demo" : status?.connected ? "live" : ""}`}>{accountLabel}</div>
+      <div className={`trade-chip ${status?.trade_ready ? "ready" : status?.connected ? "blocked" : ""}`}>{tradeLabel}</div>
       <Selector value={symbol} options={symbols} onChange={(value) => onSymbol(value as SymbolName)} />
       <Selector value={timeframe} options={timeframes} onChange={(value) => onTimeframe(value as Timeframe)} />
       <div className="equity">
@@ -844,13 +998,13 @@ function SignalPanel({
 }: {
   signal: Signal | null;
   riskMode: RiskMode;
-  riskValue: number;
+  riskValue: string;
   spreadPoints: number | null;
   symbol: SymbolName;
   hardBlockedReasons: string[];
   scoreWarningReasons: string[];
   onRiskMode: (mode: RiskMode) => void;
-  onRiskValue: (value: number) => void;
+  onRiskValue: (value: string) => void;
   executable: boolean;
   executeLabel: string;
   onExecute: () => void;
@@ -895,14 +1049,16 @@ function SignalPanel({
           </button>
         </div>
         <input
-          type="number"
-          min="0.01"
-          step="0.01"
+          type="text"
+          inputMode="decimal"
           value={riskValue}
           onChange={(event) => {
-            const nextValue = Number(event.target.value);
-            if (Number.isFinite(nextValue) && nextValue > 0) {
-              onRiskValue(nextValue);
+            onRiskValue(event.target.value);
+          }}
+          onBlur={(event) => {
+            const parsed = parseRiskValue(event.target.value);
+            if (parsed !== null) {
+              onRiskValue(formatRiskInput(parsed));
             }
           }}
         />
@@ -943,12 +1099,181 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-function sanitizeRiskValue(value: number) {
-  return Number.isFinite(value) && value > 0 ? value : 0.01;
+function parseRiskValue(value: string | number) {
+  const normalized = String(value).trim().replace(",", ".");
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function sanitizeRiskValue(value: string | number) {
+  return parseRiskValue(value) ?? 0.01;
+}
+
+function formatRiskInput(value: number) {
+  return Number.isInteger(value) ? String(value) : String(value).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 function uniqueStrings(values: string[]) {
   return Array.from(new Set(values));
+}
+
+function PositionCard({
+  positions,
+  journal,
+  activeSymbol,
+  trailingRules,
+  onTrailingRules,
+  onApplyTrailing,
+  onCloseAll,
+  onCloseTicket,
+  onCloseSymbol
+}: {
+  positions: OpenPosition[];
+  journal: TradingJournalEntry[];
+  activeSymbol: SymbolName;
+  trailingRules: TrailingRules;
+  onTrailingRules: (value: TrailingRules) => void;
+  onApplyTrailing: (ticket: number) => void;
+  onCloseAll: () => void;
+  onCloseTicket: (ticket: number) => void;
+  onCloseSymbol: (symbol: SymbolName) => void;
+}) {
+  const activeSymbolPositions = positions.filter((position) => position.symbol === activeSymbol);
+  const totalProfit = positions.reduce((sum, position) => sum + position.profit, 0);
+  const realizedPnl = journal.reduce((sum, item) => sum + (item.profit ?? 0), 0);
+  const winningTrades = journal.filter((item) => (item.profit ?? 0) > 0).length;
+  const losingTrades = journal.filter((item) => (item.profit ?? 0) < 0).length;
+  return (
+    <section className="positions-card">
+      <div className="positions-heading">
+        <div>
+          <span className="panel-title">Position</span>
+          <h2>Open position monitor</h2>
+        </div>
+        <div className={`position-pnl ${totalProfit >= 0 ? "positive" : "negative"}`}>
+          <span>Floating P/L</span>
+          <strong>{formatMoney(totalProfit)}</strong>
+        </div>
+      </div>
+      <div className="position-actions">
+        <button className="close-all-button" disabled={positions.length === 0} onClick={onCloseAll}>
+          <XCircle size={16} />
+          Close all
+        </button>
+        <button disabled={activeSymbolPositions.length === 0} onClick={() => onCloseSymbol(activeSymbol)}>
+          <XCircle size={16} />
+          Close one {activeSymbol}
+        </button>
+        <div className="trailing-rules">
+          <TrailingRuleInput label="Trigger pips" value={trailingRules.triggerPips} onChange={(value) => onTrailingRules({ ...trailingRules, triggerPips: value })} />
+          <TrailingRuleInput label="Distance pips" value={trailingRules.distancePips} onChange={(value) => onTrailingRules({ ...trailingRules, distancePips: value })} />
+          <TrailingRuleInput label="Step pips" value={trailingRules.stepPips} onChange={(value) => onTrailingRules({ ...trailingRules, stepPips: value })} />
+        </div>
+        <span>
+          {positions.length} open / {activeSymbolPositions.length} on active pair
+        </span>
+      </div>
+      {positions.length > 0 ? (
+        <div className="position-list">
+          {positions.map((position) => (
+            <article key={position.ticket} className="position-row">
+              <div className="position-main">
+                <strong>{position.symbol}</strong>
+                <span className={position.side === "BUY" ? "side-buy" : "side-sell"}>{position.side}</span>
+                <small>#{position.ticket}</small>
+              </div>
+              <div className="position-metrics">
+                <Metric label="Lot" value={position.volume.toFixed(2)} />
+                <Metric label="Open" value={formatPrice(position.open_price)} />
+                <Metric label="Now" value={formatPrice(position.current_price)} />
+                <Metric label="SL" value={formatPrice(position.stopLoss)} />
+                <Metric label="TP" value={formatPrice(position.takeProfit)} />
+                <Metric label="P/L" value={formatMoney(position.profit)} tone={position.profit >= 0 ? "profit-positive" : "profit-negative"} />
+              </div>
+              <button className="close-position-button" onClick={() => onCloseTicket(position.ticket)}>
+                <XCircle size={15} />
+                Close ticket
+              </button>
+              <button className="trail-position-button" onClick={() => onApplyTrailing(position.ticket)}>
+                <TrendingUp size={15} />
+                Apply trailing
+              </button>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="position-empty">No open MT5 positions.</div>
+      )}
+      <div className="journal-block">
+        <div className="journal-heading">
+          <div className="journal-title">
+            <BookOpen size={16} />
+            Trading journal
+          </div>
+          <div className={`realized-pnl ${realizedPnl >= 0 ? "positive" : "negative"}`}>
+            <span>Total realized P/L</span>
+            <strong>{formatMoney(realizedPnl)}</strong>
+            <small>{journal.length} closed - {winningTrades} win / {losingTrades} loss</small>
+          </div>
+        </div>
+        {journal.length > 0 ? (
+          <div className="table-scroll journal-scroll">
+          <table className="journal-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Ticket</th>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Lot</th>
+                <th>Exit</th>
+                <th>P/L</th>
+                <th>Close reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {journal.slice(0, 12).map((item, idx) => (
+                <tr key={`${item.ticket}-${item.time}-${idx}`}>
+                  <td>{formatDateLabel(item.time)}</td>
+                  <td>{item.ticket ?? "--"}</td>
+                  <td>{item.symbol}</td>
+                  <td>{item.side ?? "--"}</td>
+                  <td>{item.volume?.toFixed(2) ?? "--"}</td>
+                  <td>{formatPrice(item.exit)}</td>
+                  <td className={item.profit !== null && item.profit >= 0 ? "profit-text" : "loss-text"}>{item.profit !== null ? formatMoney(item.profit) : "--"}</td>
+                  <td>
+                    <span className={`close-reason ${item.closeReason}`}>{closeReasonLabel(item.closeReason)}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          </div>
+        ) : (
+          <div className="position-empty">Journal is waiting for closed positions from MT5 or user force close.</div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function TrailingRuleInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="trailing-control">
+      <span>{label}</span>
+      <input
+        type="text"
+        inputMode="decimal"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onBlur={(event) => {
+          const parsed = parseRiskValue(event.target.value);
+          if (parsed !== null) onChange(formatRiskInput(parsed));
+        }}
+      />
+    </label>
+  );
 }
 
 function HistoryTable({ items }: { items: HistoryItem[] }) {
@@ -986,6 +1311,7 @@ function HistoryTable({ items }: { items: HistoryItem[] }) {
 }
 
 function SignalLogTable({ items }: { items: SignalLogEntry[] }) {
+  const visibleItems = items.slice(0, 30);
   return (
     <section className="signal-log">
       <div className="signal-log-heading">
@@ -993,13 +1319,14 @@ function SignalLogTable({ items }: { items: SignalLogEntry[] }) {
           <span className="panel-title">Potential signals data</span>
           <h2>Score 60+ signal capture</h2>
         </div>
-        <span className="capture-pill">Auto scan 60s</span>
+        <span className="capture-pill">Latest {visibleItems.length}/{items.length} - Auto scan 60s</span>
       </div>
       <p className="signal-log-note">
         Semua potensi sinyal dengan confluence score minimal 60 dicatat untuk dataset strategi, termasuk hari, tanggal, jam, market, timeframe, setup,
         entry, SL, TP, spread, dan status validasi.
       </p>
       {items.length > 0 ? (
+        <div className="table-scroll signal-log-scroll">
         <table className="signal-log-table">
           <thead>
             <tr>
@@ -1019,7 +1346,7 @@ function SignalLogTable({ items }: { items: SignalLogEntry[] }) {
             </tr>
           </thead>
           <tbody>
-            {items.map((item) => (
+            {visibleItems.map((item) => (
               <tr key={item.id}>
                 <td>{item.date}</td>
                 <td>{item.day}</td>
@@ -1042,6 +1369,7 @@ function SignalLogTable({ items }: { items: SignalLogEntry[] }) {
             ))}
           </tbody>
         </table>
+        </div>
       ) : (
         <div className="signal-log-empty">
           Belum ada sinyal score 60+ yang tercatat. Backend akan otomatis menyimpan data saat scan menemukan peluang valid atau blocked dengan score
@@ -1101,23 +1429,30 @@ function ConfirmModal({
   signal,
   spread,
   scoreWarningReasons,
+  demoGuardOffWarning,
+  accountLabel,
   onCancel,
   onConfirm
 }: {
   signal: Signal;
   spread: number;
   scoreWarningReasons: string[];
+  demoGuardOffWarning: string | null;
+  accountLabel: string;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
   const hasScoreWarning = scoreWarningReasons.length > 0;
+  const hasDemoGuardWarning = Boolean(demoGuardOffWarning);
   return (
     <div className="modal-backdrop">
       <section className="modal">
         <h2>Confirm MT5 execution</h2>
         <p>
           {hasScoreWarning
-            ? "Score setup belum mendukung filter strategi. Review detail order dan konfirmasi hanya jika tetap ingin eksekusi manual ke demo terminal."
+            ? "Score setup belum mendukung filter strategi. Review detail order dan konfirmasi hanya jika tetap ingin eksekusi manual."
+            : hasDemoGuardWarning
+              ? "Demo guard sedang OFF. Review detail order dan akun MT5 aktif sebelum mengirim eksekusi."
             : "Review the single recommended order before sending it to the connected demo terminal."}
         </p>
         {hasScoreWarning ? (
@@ -1127,6 +1462,13 @@ function ConfirmModal({
             {scoreWarningReasons.map((reason) => (
               <span key={reason}>{reason}</span>
             ))}
+          </div>
+        ) : null}
+        {hasDemoGuardWarning ? (
+          <div className="execution-warning live">
+            <strong>Demo guard OFF</strong>
+            <span>{demoGuardOffWarning}</span>
+            <span>Connected status: {accountLabel}. Pastikan akun MT5 yang aktif memang akun yang ingin dipakai.</span>
           </div>
         ) : null}
         <div className="confirm-grid">
@@ -1139,11 +1481,12 @@ function ConfirmModal({
           <Metric label="Risk" value={`${signal.riskPercent ?? 0}%`} />
           <Metric label="Score" value={`${signal.score}/100`} />
           <Metric label="Spread" value={`${spread} pts`} />
+          <Metric label="Account" value={accountLabel} />
         </div>
         <div className="modal-actions">
           <button onClick={onCancel}>Cancel</button>
-          <button className={`confirm-button ${hasScoreWarning ? "warning" : ""}`} onClick={onConfirm}>
-            {hasScoreWarning ? "Confirm Execute Anyway" : "Confirm Execute"}
+          <button className={`confirm-button ${hasScoreWarning || hasDemoGuardWarning ? "warning" : ""}`} onClick={onConfirm}>
+            {hasScoreWarning || hasDemoGuardWarning ? "Confirm Execute Anyway" : "Confirm Execute"}
           </button>
         </div>
       </section>
@@ -1178,6 +1521,14 @@ function spreadStatus(symbol: SymbolName | undefined, value: number | null | und
 function spreadClass(symbol: SymbolName | undefined, value: number | null | undefined) {
   if (!symbol || value === null || value === undefined) return "spread-waiting";
   return value <= spreadLimits[symbol] ? "spread-normal" : "spread-high";
+}
+
+function closeReasonLabel(reason: TradingJournalEntry["closeReason"]) {
+  if (reason === "tp") return "TP";
+  if (reason === "sl") return "SL";
+  if (reason === "force_close_user") return "Force close";
+  if (reason === "manual_external") return "Manual MT5";
+  return "Unknown";
 }
 
 function buildNarrativeInsight({

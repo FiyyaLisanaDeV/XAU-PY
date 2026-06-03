@@ -80,12 +80,26 @@ class MarketTick(BaseModel):
 class AccountStatus(BaseModel):
     connected: bool
     demo_mode: bool
+    demo_guard_enabled: bool = True
+    live_account: bool = False
+    terminal_trade_allowed: bool = False
+    account_trade_allowed: bool = False
+    trade_ready: bool = False
     terminal_found: bool
     account_login: int | None = None
     server: str | None = None
     equity: float = 10000.0
     balance: float = 10000.0
     currency: str = "USD"
+    message: str
+
+
+class DemoGuardRequest(BaseModel):
+    enabled: bool
+
+
+class DemoGuardStatus(BaseModel):
+    enabled: bool
     message: str
 
 
@@ -138,6 +152,79 @@ class ExecuteOrderResponse(BaseModel):
     status: Literal["sent", "blocked", "simulated"]
     message: str
     validation: OrderValidation
+
+
+class OpenPosition(BaseModel):
+    ticket: int
+    symbol: Symbol
+    broker_symbol: str
+    side: Side
+    volume: float
+    open_price: float
+    current_price: float
+    stopLoss: float | None = None
+    takeProfit: float | None = None
+    profit: float
+    swap: float
+    commission: float
+    opened_at: str
+    comment: str | None = None
+
+
+class ClosePositionRequest(BaseModel):
+    ticket: int | None = None
+    symbol: Symbol | None = None
+    all: bool = False
+    confirmed: bool = False
+
+
+class ClosePositionResult(BaseModel):
+    accepted: bool
+    ticket: int | None = None
+    symbol: Symbol | None = None
+    message: str
+
+
+class ClosePositionResponse(BaseModel):
+    accepted: bool
+    ticket: int | None = None
+    status: Literal["closed", "blocked"]
+    message: str
+    closedCount: int = 0
+    failedCount: int = 0
+    results: list[ClosePositionResult] = []
+
+
+class TrailingStopRequest(BaseModel):
+    ticket: int
+    trigger_pips: float = Field(default=5.0, ge=0)
+    distance_pips: float = Field(gt=0)
+    step_pips: float = Field(default=1.0, ge=0)
+    confirmed: bool = False
+
+
+class TrailingStopResponse(BaseModel):
+    accepted: bool
+    ticket: int
+    status: Literal["updated", "blocked"]
+    message: str
+    oldStopLoss: float | None = None
+    newStopLoss: float | None = None
+    profitPips: float | None = None
+
+
+class TradingJournalEntry(BaseModel):
+    time: str
+    ticket: int | None
+    symbol: Symbol
+    side: Side | None = None
+    volume: float | None = None
+    entry: float | None = None
+    exit: float | None = None
+    profit: float | None = None
+    closeReason: Literal["tp", "sl", "force_close_user", "manual_external", "unknown"]
+    source: Literal["app", "mt5"]
+    note: str
 
 
 class HistoryItem(BaseModel):

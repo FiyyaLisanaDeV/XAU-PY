@@ -1,4 +1,5 @@
-from backend.app.models import OrderType, RiskMode, RiskRequest, Side
+import backend.app.mt5_bridge as mt5_bridge_module
+from backend.app.models import ExecuteOrderRequest, OrderType, RiskMode, RiskRequest, Side
 from backend.app.mt5_bridge import MT5Bridge
 from backend.app.risk import validate_order
 from backend.app.strategy import build_snapshot, recommend
@@ -54,3 +55,72 @@ def test_strategy_returns_single_relevant_action_or_block():
     else:
         assert signal.side in {Side.BUY, Side.SELL}
         assert signal.orderType is not None
+
+
+def test_mt5_trial_server_is_treated_as_demo_account():
+    class Account:
+        server = "Exness-MT5Trial17"
+        trade_mode = "1"
+
+    assert MT5Bridge._is_demo_account(Account())
+
+
+def test_mt5_market_order_request_uses_broker_symbol_and_live_price(monkeypatch):
+    class FakeInfo:
+        digits = 5
+        volume_min = 0.01
+        volume_max = 100.0
+        volume_step = 0.01
+        filling_mode = 1
+
+    class FakeTick:
+        bid = 1.084
+        ask = 1.08412
+
+    class FakeMT5:
+        TRADE_ACTION_DEAL = 1
+        TRADE_ACTION_PENDING = 5
+        ORDER_TYPE_BUY = 0
+        ORDER_TYPE_SELL = 1
+        ORDER_TYPE_BUY_LIMIT = 2
+        ORDER_TYPE_SELL_LIMIT = 3
+        ORDER_TYPE_BUY_STOP = 4
+        ORDER_TYPE_SELL_STOP = 5
+        ORDER_TIME_GTC = 0
+        ORDER_FILLING_FOK = 0
+        ORDER_FILLING_IOC = 1
+        ORDER_FILLING_RETURN = 2
+
+        @staticmethod
+        def symbol_info(_symbol):
+            return FakeInfo()
+
+        @staticmethod
+        def symbol_info_tick(_symbol):
+            return FakeTick()
+
+    monkeypatch.setattr(mt5_bridge_module, "mt5", FakeMT5)
+    bridge = MT5Bridge()
+    request = bridge._build_order_request(
+        ExecuteOrderRequest(
+            symbol="EURUSD",
+            timeframe="H1",
+            side=Side.BUY,
+            orderType=OrderType.BUY_MARKET,
+            entry=1.08,
+            stopLoss=1.079,
+            takeProfit=1.086,
+            riskMode=RiskMode.FIXED_LOT,
+            riskValue=0.01,
+            lot=0.01,
+            confirmed=True,
+        ),
+        "EURUSDm",
+        fallback_lot=0.01,
+    )
+
+    assert request is not None
+    assert request["action"] == FakeMT5.TRADE_ACTION_DEAL
+    assert request["symbol"] == "EURUSDm"
+    assert request["type"] == FakeMT5.ORDER_TYPE_BUY
+    assert request["price"] == FakeTick.ask

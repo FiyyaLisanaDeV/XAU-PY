@@ -6,7 +6,7 @@ import random
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .models import AccountStatus, Candle, Symbol, Timeframe
+from .models import AccountStatus, Candle, ExecuteOrderRequest, OpenPosition, OrderType, Side, Symbol, Timeframe, TradingJournalEntry
 
 try:
     import MetaTrader5 as mt5  # type: ignore
@@ -41,6 +41,9 @@ class MT5Bridge:
         self._initialized = False
         self._symbol_map: dict[Symbol, str] = {}
 
+    def set_demo_guard(self, enabled: bool) -> None:
+        self.demo_only = enabled
+
     def initialize(self) -> bool:
         if mt5 is None:
             return False
@@ -55,6 +58,11 @@ class MT5Bridge:
             return AccountStatus(
                 connected=False,
                 demo_mode=True,
+                demo_guard_enabled=self.demo_only,
+                live_account=False,
+                terminal_trade_allowed=False,
+                account_trade_allowed=False,
+                trade_ready=False,
                 terminal_found=False,
                 message="MetaTrader5 Python package or terminal is not available. Market data uses mock mode; execution is blocked.",
             )
@@ -64,6 +72,11 @@ class MT5Bridge:
             return AccountStatus(
                 connected=False,
                 demo_mode=True,
+                demo_guard_enabled=self.demo_only,
+                live_account=False,
+                terminal_trade_allowed=False,
+                account_trade_allowed=False,
+                trade_ready=False,
                 terminal_found=True,
                 message="MetaTrader5 package is installed, but no Exness MT5 terminal session is connected.",
             )
@@ -73,22 +86,38 @@ class MT5Bridge:
             return AccountStatus(
                 connected=False,
                 demo_mode=True,
+                demo_guard_enabled=self.demo_only,
+                live_account=False,
+                terminal_trade_allowed=False,
+                account_trade_allowed=False,
+                trade_ready=False,
                 terminal_found=True,
                 message="MT5 initialized, but account info is unavailable. Log in to an Exness demo account.",
             )
 
+        terminal = mt5.terminal_info()
         server = getattr(account, "server", None)
-        trade_mode = str(getattr(account, "trade_mode", "")).lower()
+        demo_account = self._is_demo_account(account)
+        terminal_trade_allowed = bool(getattr(terminal, "trade_allowed", False)) if terminal else False
+        account_trade_allowed = bool(getattr(account, "trade_allowed", False))
+        trade_ready = terminal_trade_allowed and account_trade_allowed
+        guard_message = "Demo guard is ON." if self.demo_only else "Demo guard is OFF; live account execution is not blocked by the app."
+        trade_message = "Trading is enabled." if trade_ready else "Trading is blocked because MT5 AutoTrading/Algo Trading is disabled."
         return AccountStatus(
             connected=True,
-            demo_mode=self.demo_only or "demo" in str(server).lower() or trade_mode == "0",
+            demo_mode=demo_account,
+            demo_guard_enabled=self.demo_only,
+            live_account=not demo_account,
+            terminal_trade_allowed=terminal_trade_allowed,
+            account_trade_allowed=account_trade_allowed,
+            trade_ready=trade_ready,
             terminal_found=True,
             account_login=getattr(account, "login", None),
             server=server,
             equity=float(getattr(account, "equity", 10000.0)),
             balance=float(getattr(account, "balance", 10000.0)),
             currency=getattr(account, "currency", "USD"),
-            message="Connected to MT5. Demo-first execution guard is active.",
+            message=f"Connected to MT5. {guard_message} {trade_message}",
         )
 
     def fetch_candles(self, symbol: Symbol, timeframe: Timeframe, count: int = 120) -> list[Candle]:
@@ -168,21 +197,352 @@ class MT5Bridge:
                 return candidate
         return None
 
-    def send_order(self, payload: dict[str, Any]) -> tuple[bool, int | None, str]:
+    def send_order(self, order: ExecuteOrderRequest, fallback_lot: float | None = None) -> tuple[bool, int | None, str]:
         if mt5 is None or not self.initialize():
             return False, None, "MT5 is not connected; order was not sent."
         if self.demo_only:
             account = mt5.account_info()
-            server = str(getattr(account, "server", "")).lower() if account else ""
-            if "demo" not in server:
-                return False, None, "Demo-only guard blocked execution on a non-demo account."
-        result = mt5.order_send(payload)
+            if not self._is_demo_account(account):
+                return False, None, "Demo guard blocked execution on a non-demo account."
+        terminal = mt5.terminal_info()
+        account = mt5.account_info()
+        if not bool(getattr(terminal, "trade_allowed", False)) or not bool(getattr(account, "trade_allowed", False)):
+            return False, None, "MT5 trading is blocked. Enable Algo Trading/AutoTrading in the MT5 terminal and allow automated trading for the account."
+
+        broker_symbol = self.resolve_symbol(order.symbol)
+        if broker_symbol is None:
+            return False, None, f"Broker symbol for {order.symbol} is unavailable."
+        request = self._build_order_request(order, broker_symbol, fallback_lot)
+        if request is None:
+            return False, None, "MT5 order request could not be built from the selected setup."
+
+        check = mt5.order_check(request)
+        if check is None:
+            return False, None, f"MT5 order_check returned no result. Last error: {mt5.last_error()}"
+        check_retcode = getattr(check, "retcode", None)
+        if check_retcode not in {0, 10008, 10009}:
+            comment = getattr(check, "comment", None) or getattr(check, "retcode_external", None) or check_retcode
+            return False, None, f"MT5 order_check blocked request: {comment}"
+
+        result = mt5.order_send(request)
         if result is None:
-            return False, None, "MT5 order_send returned no result."
+            return False, None, f"MT5 order_send returned no result. Last error: {mt5.last_error()}"
         retcode = getattr(result, "retcode", None)
         ticket = getattr(result, "order", None) or getattr(result, "deal", None)
         ok = retcode in {10008, 10009}
-        return ok, int(ticket) if ticket else None, str(getattr(result, "comment", retcode))
+        comment = getattr(result, "comment", None) or retcode
+        if not ok:
+            return False, None, f"MT5 order_send rejected request: {comment}"
+        return True, int(ticket) if ticket else None, str(comment)
+
+    def open_positions(self) -> list[OpenPosition]:
+        if mt5 is None or not self.initialize():
+            return []
+        positions = mt5.positions_get()
+        if not positions:
+            return []
+        mapped: list[OpenPosition] = []
+        for position in positions:
+            symbol = self._base_symbol(str(getattr(position, "symbol", "")))
+            if symbol is None:
+                continue
+            side = Side.BUY if int(getattr(position, "type", 0)) == mt5.POSITION_TYPE_BUY else Side.SELL
+            mapped.append(
+                OpenPosition(
+                    ticket=int(getattr(position, "ticket", 0)),
+                    symbol=symbol,
+                    broker_symbol=str(getattr(position, "symbol", "")),
+                    side=side,
+                    volume=float(getattr(position, "volume", 0.0)),
+                    open_price=float(getattr(position, "price_open", 0.0)),
+                    current_price=float(getattr(position, "price_current", 0.0)),
+                    stopLoss=float(getattr(position, "sl", 0.0)) or None,
+                    takeProfit=float(getattr(position, "tp", 0.0)) or None,
+                    profit=float(getattr(position, "profit", 0.0)),
+                    swap=float(getattr(position, "swap", 0.0)),
+                    commission=float(getattr(position, "commission", 0.0)),
+                    opened_at=datetime.fromtimestamp(int(getattr(position, "time", 0)), tz=timezone.utc).isoformat(),
+                    comment=str(getattr(position, "comment", "")) or None,
+                )
+            )
+        return mapped
+
+    def close_position(self, ticket: int | None = None, symbol: Symbol | None = None) -> tuple[bool, int | None, str, OpenPosition | None]:
+        if mt5 is None or not self.initialize():
+            return False, ticket, "MT5 is not connected; position was not closed.", None
+        terminal = mt5.terminal_info()
+        account = mt5.account_info()
+        if not bool(getattr(terminal, "trade_allowed", False)) or not bool(getattr(account, "trade_allowed", False)):
+            return False, ticket, "MT5 trading is blocked. Enable Algo Trading/AutoTrading in the MT5 terminal.", None
+        positions = self.open_positions()
+        selected = self._select_position(positions, ticket, symbol)
+        if selected is None:
+            return False, ticket, "No matching open position was found.", None
+
+        tick = mt5.symbol_info_tick(selected.broker_symbol)
+        info = mt5.symbol_info(selected.broker_symbol)
+        if tick is None or info is None:
+            return False, selected.ticket, "Live tick or symbol info is unavailable for closing.", selected
+        digits = int(getattr(info, "digits", 5))
+        close_type = mt5.ORDER_TYPE_SELL if selected.side == Side.BUY else mt5.ORDER_TYPE_BUY
+        price = float(tick.bid) if selected.side == Side.BUY else float(tick.ask)
+        request: dict[str, Any] = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": selected.broker_symbol,
+            "volume": selected.volume,
+            "type": close_type,
+            "position": selected.ticket,
+            "price": round(price, digits),
+            "deviation": int(os.getenv("XAUGBPEUUSD_MT5_DEVIATION", "30")),
+            "magic": int(os.getenv("XAUGBPEUUSD_MT5_MAGIC", "260603")),
+            "comment": "XAUGBPEUUSD force close",
+        }
+        filling = self._select_filling_mode(info, is_market=True)
+        if filling is not None:
+            request["type_filling"] = filling
+        result = mt5.order_send(request)
+        if result is None:
+            return False, selected.ticket, f"MT5 close returned no result. Last error: {mt5.last_error()}", selected
+        retcode = getattr(result, "retcode", None)
+        comment = getattr(result, "comment", None) or retcode
+        if retcode not in {10008, 10009}:
+            return False, selected.ticket, f"MT5 close rejected request: {comment}", selected
+        return True, selected.ticket, str(comment), selected
+
+    def apply_trailing_stop(self, ticket: int, trigger_pips: float, distance_pips: float, step_pips: float) -> tuple[bool, str, float | None, float | None, float | None]:
+        if mt5 is None or not self.initialize():
+            return False, "MT5 is not connected; trailing stop was not updated.", None, None, None
+        terminal = mt5.terminal_info()
+        account = mt5.account_info()
+        if not bool(getattr(terminal, "trade_allowed", False)) or not bool(getattr(account, "trade_allowed", False)):
+            return False, "MT5 trading is blocked. Enable Algo Trading/AutoTrading in the MT5 terminal.", None, None, None
+        selected = self._select_position(self.open_positions(), ticket=ticket, symbol=None)
+        if selected is None:
+            return False, "No matching open position was found.", None, None, None
+        info = mt5.symbol_info(selected.broker_symbol)
+        tick = mt5.symbol_info_tick(selected.broker_symbol)
+        if info is None or tick is None:
+            return False, "Live tick or symbol info is unavailable for trailing stop.", selected.stopLoss, None, None
+
+        point = float(getattr(info, "point", 0.0) or 0.0)
+        digits = int(getattr(info, "digits", 5))
+        if point <= 0:
+            return False, "Symbol point metadata is invalid.", selected.stopLoss, None, None
+        pip_size = self._pip_size(info)
+        min_stop_points = float(getattr(info, "trade_stops_level", 0.0) or 0.0)
+        distance_price = max(distance_pips * pip_size, min_stop_points * point)
+        step_price = step_pips * pip_size
+        current_price = float(tick.bid) if selected.side == Side.BUY else float(tick.ask)
+        if selected.side == Side.BUY:
+            profit_pips = (current_price - selected.open_price) / pip_size
+        else:
+            profit_pips = (selected.open_price - current_price) / pip_size
+        profit_pips = round(profit_pips, 1)
+        if profit_pips < trigger_pips:
+            return False, f"Trailing trigger not reached: {profit_pips:g}/{trigger_pips:g} pips.", selected.stopLoss, None, profit_pips
+        if selected.side == Side.BUY:
+            candidate_sl = round(current_price - distance_price, digits)
+            if candidate_sl <= selected.open_price:
+                return False, "Trailing stop is not in profit yet.", selected.stopLoss, candidate_sl, profit_pips
+            if selected.stopLoss is not None and candidate_sl <= selected.stopLoss:
+                return False, "Existing stop loss is already tighter than this trailing stop.", selected.stopLoss, candidate_sl, profit_pips
+            if selected.stopLoss is not None and candidate_sl - selected.stopLoss < step_price:
+                return False, f"Trailing step not reached: need {step_pips:g} pips movement.", selected.stopLoss, candidate_sl, profit_pips
+        else:
+            candidate_sl = round(current_price + distance_price, digits)
+            if candidate_sl >= selected.open_price:
+                return False, "Trailing stop is not in profit yet.", selected.stopLoss, candidate_sl, profit_pips
+            if selected.stopLoss is not None and candidate_sl >= selected.stopLoss:
+                return False, "Existing stop loss is already tighter than this trailing stop.", selected.stopLoss, candidate_sl, profit_pips
+            if selected.stopLoss is not None and selected.stopLoss - candidate_sl < step_price:
+                return False, f"Trailing step not reached: need {step_pips:g} pips movement.", selected.stopLoss, candidate_sl, profit_pips
+
+        request: dict[str, Any] = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "position": selected.ticket,
+            "symbol": selected.broker_symbol,
+            "sl": candidate_sl,
+            "tp": selected.takeProfit or 0.0,
+            "magic": int(os.getenv("XAUGBPEUUSD_MT5_MAGIC", "260603")),
+            "comment": "XAUGBPEUUSD trailing stop",
+        }
+        result = mt5.order_send(request)
+        if result is None:
+            return False, f"MT5 trailing stop returned no result. Last error: {mt5.last_error()}", selected.stopLoss, candidate_sl, profit_pips
+        retcode = getattr(result, "retcode", None)
+        comment = getattr(result, "comment", None) or retcode
+        if retcode not in {10008, 10009}:
+            return False, f"MT5 trailing stop rejected request: {comment}", selected.stopLoss, candidate_sl, profit_pips
+        return True, f"Trailing stop updated to {candidate_sl} at {profit_pips:g} pips profit.", selected.stopLoss, candidate_sl, profit_pips
+
+    @staticmethod
+    def _pip_size(info: Any) -> float:
+        point = float(getattr(info, "point", 0.00001) or 0.00001)
+        digits = int(getattr(info, "digits", 5))
+        return point * 10 if digits in {3, 5} else point
+
+    def recent_closed_deals(self, hours: int = 48) -> list[TradingJournalEntry]:
+        if mt5 is None or not self.initialize():
+            return []
+        date_to = datetime.now(timezone.utc)
+        date_from = date_to - timedelta(hours=hours)
+        deals = mt5.history_deals_get(date_from, date_to)
+        if not deals:
+            return []
+        entries: list[TradingJournalEntry] = []
+        for deal in deals:
+            entry_type = int(getattr(deal, "entry", -1))
+            if entry_type not in {getattr(mt5, "DEAL_ENTRY_OUT", 1), getattr(mt5, "DEAL_ENTRY_INOUT", 2)}:
+                continue
+            symbol = self._base_symbol(str(getattr(deal, "symbol", "")))
+            if symbol is None:
+                continue
+            side = Side.SELL if int(getattr(deal, "type", 0)) == getattr(mt5, "DEAL_TYPE_SELL", 1) else Side.BUY
+            reason = self._deal_close_reason(deal)
+            entries.append(
+                TradingJournalEntry(
+                    time=datetime.fromtimestamp(int(getattr(deal, "time", 0)), tz=timezone.utc).isoformat(),
+                    ticket=int(getattr(deal, "position_id", 0)) or int(getattr(deal, "ticket", 0)),
+                    symbol=symbol,
+                    side=side,
+                    volume=float(getattr(deal, "volume", 0.0)),
+                    entry=None,
+                    exit=float(getattr(deal, "price", 0.0)) or None,
+                    profit=float(getattr(deal, "profit", 0.0)),
+                    closeReason=reason,
+                    source="mt5",
+                    note=str(getattr(deal, "comment", "")) or "MT5 closed deal",
+                )
+            )
+        return entries
+
+    @staticmethod
+    def _select_position(positions: list[OpenPosition], ticket: int | None, symbol: Symbol | None) -> OpenPosition | None:
+        if ticket is not None:
+            return next((position for position in positions if position.ticket == ticket), None)
+        if symbol is not None:
+            return next((position for position in positions if position.symbol == symbol), None)
+        return None
+
+    @staticmethod
+    def _base_symbol(broker_symbol: str) -> Symbol | None:
+        for symbol in ("XAUUSD", "GBPUSD", "EURUSD"):
+            if symbol in broker_symbol.upper():
+                return symbol  # type: ignore[return-value]
+        return None
+
+    @staticmethod
+    def _deal_close_reason(deal: Any) -> str:
+        if mt5 is not None:
+            deal_reason = getattr(deal, "reason", None)
+            if deal_reason == getattr(mt5, "DEAL_REASON_TP", None):
+                return "tp"
+            if deal_reason == getattr(mt5, "DEAL_REASON_SL", None):
+                return "sl"
+            if deal_reason in {
+                getattr(mt5, "DEAL_REASON_CLIENT", None),
+                getattr(mt5, "DEAL_REASON_MOBILE", None),
+                getattr(mt5, "DEAL_REASON_WEB", None),
+            }:
+                return "manual_external"
+            if deal_reason == getattr(mt5, "DEAL_REASON_EXPERT", None):
+                return "force_close_user"
+        comment = str(getattr(deal, "comment", "")).lower()
+        text = comment
+        if "tp" in text or "take" in text:
+            return "tp"
+        if "sl" in text or "stop" in text:
+            return "sl"
+        if "force close" in text or "xaugbpeuusd" in text:
+            return "force_close_user"
+        if comment:
+            return "manual_external"
+        return "unknown"
+
+    def _build_order_request(self, order: ExecuteOrderRequest, broker_symbol: str, fallback_lot: float | None) -> dict[str, Any] | None:
+        if mt5 is None:
+            return None
+        info = mt5.symbol_info(broker_symbol)
+        tick = mt5.symbol_info_tick(broker_symbol)
+        if info is None or tick is None:
+            return None
+        volume = self._normalize_volume(float(order.lot or fallback_lot or 0.0), info)
+        if volume <= 0:
+            return None
+        digits = int(getattr(info, "digits", 5))
+        mt5_type = self._map_order_type(order.orderType)
+        if mt5_type is None:
+            return None
+        is_market = order.orderType in {OrderType.BUY_MARKET, OrderType.SELL_MARKET}
+        if order.orderType == OrderType.BUY_MARKET:
+            price = float(tick.ask)
+        elif order.orderType == OrderType.SELL_MARKET:
+            price = float(tick.bid)
+        else:
+            price = order.entry
+
+        request: dict[str, Any] = {
+            "action": mt5.TRADE_ACTION_DEAL if is_market else mt5.TRADE_ACTION_PENDING,
+            "symbol": broker_symbol,
+            "volume": volume,
+            "type": mt5_type,
+            "price": round(float(price), digits),
+            "sl": round(float(order.stopLoss), digits),
+            "tp": round(float(order.takeProfit), digits),
+            "deviation": int(os.getenv("XAUGBPEUUSD_MT5_DEVIATION", "30")),
+            "magic": int(os.getenv("XAUGBPEUUSD_MT5_MAGIC", "260603")),
+            "comment": "XAUGBPEUUSD strategy app",
+            "type_time": mt5.ORDER_TIME_GTC,
+        }
+        filling = self._select_filling_mode(info, is_market)
+        if filling is not None:
+            request["type_filling"] = filling
+        return request
+
+    @staticmethod
+    def _map_order_type(order_type: OrderType) -> int | None:
+        if mt5 is None:
+            return None
+        return {
+            OrderType.BUY_MARKET: mt5.ORDER_TYPE_BUY,
+            OrderType.SELL_MARKET: mt5.ORDER_TYPE_SELL,
+            OrderType.BUY_LIMIT: mt5.ORDER_TYPE_BUY_LIMIT,
+            OrderType.SELL_LIMIT: mt5.ORDER_TYPE_SELL_LIMIT,
+            OrderType.BUY_STOP: mt5.ORDER_TYPE_BUY_STOP,
+            OrderType.SELL_STOP: mt5.ORDER_TYPE_SELL_STOP,
+        }.get(order_type)
+
+    @staticmethod
+    def _normalize_volume(volume: float, info: Any) -> float:
+        min_volume = float(getattr(info, "volume_min", 0.01) or 0.01)
+        max_volume = float(getattr(info, "volume_max", volume) or volume)
+        step = float(getattr(info, "volume_step", 0.01) or 0.01)
+        normalized = max(min_volume, min(volume, max_volume))
+        steps = math.floor((normalized + 1e-12) / step)
+        return round(max(min_volume, steps * step), 2)
+
+    @staticmethod
+    def _select_filling_mode(info: Any, is_market: bool) -> int | None:
+        if mt5 is None:
+            return None
+        if not is_market:
+            return getattr(mt5, "ORDER_FILLING_RETURN", None)
+        broker_mode = getattr(info, "filling_mode", None)
+        if broker_mode in {
+            getattr(mt5, "ORDER_FILLING_FOK", None),
+            getattr(mt5, "ORDER_FILLING_IOC", None),
+            getattr(mt5, "ORDER_FILLING_RETURN", None),
+        }:
+            return int(broker_mode)
+        return getattr(mt5, "ORDER_FILLING_IOC", None)
+
+    @staticmethod
+    def _is_demo_account(account: Any | None) -> bool:
+        if account is None:
+            return False
+        server = str(getattr(account, "server", "")).lower()
+        trade_mode = str(getattr(account, "trade_mode", "")).lower()
+        return "demo" in server or "trial" in server or trade_mode == "0"
 
     @staticmethod
     def _map_timeframe(timeframe: Timeframe) -> int:

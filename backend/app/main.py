@@ -6,12 +6,18 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from .models import (
+    ClosePositionRequest,
+    ClosePositionResponse,
+    ClosePositionResult,
+    DemoGuardRequest,
+    DemoGuardStatus,
     EconomicCalendarResponse,
     ExecuteOrderRequest,
     ExecuteOrderResponse,
     HistoryItem,
     MarketSnapshot,
     MarketTick,
+    OpenPosition,
     OrderRecommendation,
     OrderValidation,
     RiskMode,
@@ -19,6 +25,9 @@ from .models import (
     SignalLogEntry,
     Symbol,
     Timeframe,
+    TradingJournalEntry,
+    TrailingStopRequest,
+    TrailingStopResponse,
 )
 from .economic_calendar import load_calendar_events
 from .mt5_bridge import MT5Bridge
@@ -37,6 +46,7 @@ app.add_middleware(
 
 bridge = MT5Bridge()
 history: list[HistoryItem] = []
+journal: list[TradingJournalEntry] = []
 SCAN_SYMBOLS: tuple[Symbol, ...] = ("XAUUSD", "GBPUSD", "EURUSD")
 SCAN_TIMEFRAMES: tuple[Timeframe, ...] = ("M15", "M30", "H1", "H4", "D1")
 
@@ -44,6 +54,16 @@ SCAN_TIMEFRAMES: tuple[Timeframe, ...] = ("M15", "M30", "H1", "H4", "D1")
 @app.get("/api/status")
 def status():
     return bridge.status()
+
+
+@app.post("/api/demo-guard", response_model=DemoGuardStatus)
+def set_demo_guard(request: DemoGuardRequest):
+    bridge.set_demo_guard(request.enabled)
+    if request.enabled:
+        message = "Demo guard ON. Non-demo account execution will be blocked."
+    else:
+        message = "Demo guard OFF. App will warn before execution, but non-demo account execution is not blocked by this guard."
+    return DemoGuardStatus(enabled=bridge.demo_only, message=message)
 
 
 @app.get("/api/market/snapshot", response_model=MarketSnapshot)
@@ -151,16 +171,7 @@ def execute_order(request: ExecuteOrderRequest):
             validation=validation,
         )
 
-    accepted, ticket, message = bridge.send_order(
-        {
-            "symbol": request.symbol,
-            "volume": request.lot or validation.lot,
-            "price": request.entry,
-            "sl": request.stopLoss,
-            "tp": request.takeProfit,
-            "comment": "XAUGBPEUUSD strategy app",
-        }
-    )
+    accepted, ticket, message = bridge.send_order(request, fallback_lot=validation.lot)
     add_history(request.symbol, request.timeframe, 0, f"{request.orderType.value}", "sent" if accepted else "blocked")
     return ExecuteOrderResponse(
         accepted=accepted,
@@ -168,6 +179,84 @@ def execute_order(request: ExecuteOrderRequest):
         status="sent" if accepted else "blocked",
         message=message,
         validation=validation,
+    )
+
+
+@app.get("/api/positions", response_model=list[OpenPosition])
+def positions():
+    return bridge.open_positions()
+
+
+@app.post("/api/positions/close", response_model=ClosePositionResponse)
+def close_position(request: ClosePositionRequest):
+    if not request.confirmed:
+        raise HTTPException(status_code=400, detail="Position close confirmation is required.")
+    if not request.all and request.ticket is None and request.symbol is None:
+        raise HTTPException(status_code=400, detail="Provide either a ticket or symbol to close one position.")
+    if request.all:
+        positions_to_close = bridge.open_positions()
+        if not positions_to_close:
+            return ClosePositionResponse(
+                accepted=False,
+                ticket=None,
+                status="blocked",
+                message="No open positions to close.",
+                closedCount=0,
+                failedCount=0,
+                results=[],
+            )
+        results: list[ClosePositionResult] = []
+        for position_item in positions_to_close:
+            accepted, ticket, message, position = bridge.close_position(ticket=position_item.ticket)
+            if accepted and position:
+                record_force_close(ticket, position)
+            results.append(ClosePositionResult(accepted=accepted, ticket=ticket, symbol=position_item.symbol, message=message))
+        closed_count = sum(1 for item in results if item.accepted)
+        failed_count = len(results) - closed_count
+        return ClosePositionResponse(
+            accepted=closed_count > 0 and failed_count == 0,
+            ticket=None,
+            status="closed" if closed_count > 0 else "blocked",
+            message=f"Close all completed: {closed_count} closed, {failed_count} failed.",
+            closedCount=closed_count,
+            failedCount=failed_count,
+            results=results,
+        )
+    accepted, ticket, message, position = bridge.close_position(ticket=request.ticket, symbol=request.symbol)
+    if accepted and position:
+        record_force_close(ticket, position)
+    return ClosePositionResponse(
+        accepted=accepted,
+        ticket=ticket,
+        status="closed" if accepted else "blocked",
+        message=message,
+        closedCount=1 if accepted else 0,
+        failedCount=0 if accepted else 1,
+        results=[ClosePositionResult(accepted=accepted, ticket=ticket, symbol=position.symbol if position else request.symbol, message=message)],
+    )
+
+
+@app.post("/api/positions/trailing-stop", response_model=TrailingStopResponse)
+def trailing_stop(request: TrailingStopRequest):
+    if not request.confirmed:
+        raise HTTPException(status_code=400, detail="Trailing stop confirmation is required.")
+    position = next((item for item in bridge.open_positions() if item.ticket == request.ticket), None)
+    accepted, message, old_sl, new_sl, profit_pips = bridge.apply_trailing_stop(
+        request.ticket,
+        trigger_pips=request.trigger_pips,
+        distance_pips=request.distance_pips,
+        step_pips=request.step_pips,
+    )
+    if accepted and position:
+        add_history(position.symbol, "H1", 0, "TRAILING_STOP", "updated")
+    return TrailingStopResponse(
+        accepted=accepted,
+        ticket=request.ticket,
+        status="updated" if accepted else "blocked",
+        message=message,
+        oldStopLoss=old_sl,
+        newStopLoss=new_sl,
+        profitPips=profit_pips,
     )
 
 
@@ -187,9 +276,44 @@ def economic_calendar():
     return load_calendar_events()
 
 
+@app.get("/api/journal", response_model=list[TradingJournalEntry])
+def trading_journal():
+    combined: dict[str, TradingJournalEntry] = {}
+    for entry in bridge.recent_closed_deals():
+        key = f"{entry.ticket}-{entry.time}-{entry.closeReason}"
+        combined[key] = entry
+    for entry in journal:
+        key = f"{entry.ticket}-{entry.time}-{entry.closeReason}"
+        combined[key] = entry
+    return sorted(combined.values(), key=lambda item: item.time, reverse=True)[:100]
+
+
 @app.get("/api/signal-log", response_model=list[SignalLogEntry])
 def signal_log(limit: int = Query(100, ge=1, le=500)):
     return read_signal_log(limit=limit)
+
+
+def add_journal(entry: TradingJournalEntry) -> None:
+    journal.append(entry)
+
+
+def record_force_close(ticket: int | None, position: OpenPosition) -> None:
+    add_journal(
+        TradingJournalEntry(
+            time=datetime.now(timezone.utc).isoformat(),
+            ticket=ticket,
+            symbol=position.symbol,
+            side=position.side,
+            volume=position.volume,
+            entry=position.open_price,
+            exit=position.current_price,
+            profit=position.profit,
+            closeReason="force_close_user",
+            source="app",
+            note="Closed by user from Position card",
+        )
+    )
+    add_history(position.symbol, "H1", 0, "FORCE_CLOSE", "closed")
 
 
 def add_history(symbol: Symbol, timeframe: Timeframe, score: int, action: str, status_value: str) -> None:
