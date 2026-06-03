@@ -1,0 +1,1 @@
+"""XAUGBPEUUSD strategy backend."""
