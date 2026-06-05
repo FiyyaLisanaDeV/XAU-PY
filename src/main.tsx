@@ -17,7 +17,7 @@ import {
 import { Activity, AlertTriangle, BookOpen, CheckCircle2, ChevronDown, Layers, Maximize2, Minimize2, PlugZap, ShieldCheck, TrendingUp, XCircle } from "lucide-react";
 import "./styles.css";
 
-type SymbolName = "XAUUSD" | "GBPUSD" | "EURUSD";
+type SymbolName = "XAUUSD" | "EURUSD";
 type Timeframe = "M15" | "M30" | "H1" | "H4" | "D1";
 type RiskMode = "fixed_lot" | "fixed_usd" | "percent_equity";
 type IndicatorKey = "ema" | "ma" | "supportResistance" | "supplyDemand" | "fib" | "live";
@@ -81,6 +81,138 @@ interface DemoGuardStatus {
   message: string;
 }
 
+interface BackendHealth {
+  active: boolean;
+  service: string;
+  startedAt: string;
+  serverTime: string;
+  pid: number;
+  message: string;
+}
+
+interface BackendRestartResponse {
+  accepted: boolean;
+  status: "scheduled" | "blocked";
+  message: string;
+}
+
+interface DataResetResponse {
+  accepted: boolean;
+  message: string;
+  cleared: string[];
+}
+
+interface InvestingDataSync {
+  source: string;
+  symbol: SymbolName;
+  sync_status: "SUCCESS" | "FAILED" | "CACHE_USED" | "BLOCKED";
+  data_mode: "FRESH" | "CACHE" | "NONE";
+  last_sync_utc: string | null;
+  retry_attempt: number;
+  retry_max: number;
+  cache_available: boolean;
+  cache_age_seconds: number | null;
+  parser_status: "OK" | "FAILED";
+  strategy_use: "ALLOWED" | "BLOCKED";
+  using_cache: boolean;
+  message: string;
+  error: string | null;
+}
+
+interface InvestingStatusResponse {
+  investing_data_sync: InvestingDataSync;
+}
+
+interface InvestingStatusCollection {
+  items: Partial<Record<SymbolName, InvestingStatusResponse>>;
+}
+
+interface InvestingAction {
+  label: string;
+  code: string;
+}
+
+interface InvestingTimeframeSignal {
+  label: string;
+  mapped_label: string;
+  signal: InvestingAction;
+  active: boolean;
+  locked: boolean;
+  raw?: string[];
+}
+
+interface InvestingTechnicalItem {
+  value: number | null;
+  action?: InvestingAction;
+  raw?: string[];
+  source?: string;
+}
+
+interface InvestingTechnicalData {
+  source?: string;
+  symbol?: SymbolName;
+  url?: string;
+  pivot_url?: string;
+  selected_timeframe?: string;
+  selected_timeframe_label?: string;
+  timeframe_signals?: Record<string, InvestingTimeframeSignal>;
+  app_timeframe_map?: Partial<Record<Timeframe, string>>;
+  sources?: {
+    technical?: string;
+    pivot_fibonacci?: string;
+  };
+  scraped_at_utc?: string;
+  pivot_parser_status?: "OK" | "EMPTY" | "FAILED" | "TECHNICAL_FALLBACK";
+  pivot_error?: string | null;
+  summary?: {
+    overall?: string;
+    moving_average?: { signal?: string; buy?: number; neutral?: number; sell?: number };
+    technical_indicators?: { signal?: string; buy?: number; neutral?: number; sell?: number };
+  };
+  indicators?: Record<string, InvestingTechnicalItem>;
+  moving_averages?: Record<string, InvestingTechnicalItem>;
+  pivot_points?: Record<string, InvestingTechnicalItem>;
+}
+
+interface InvestingTechnicalCollection {
+  items: Partial<Record<SymbolName, InvestingTechnicalData>>;
+}
+
+interface RiskExposure {
+  equity: number;
+  maxTotalRiskPercent: number;
+  totalRiskUsd: number;
+  totalRiskPercent: number;
+  availableRiskPercent: number;
+  blocked: boolean;
+  blockedReasons: string[];
+  items?: unknown[];
+}
+
+interface AutoModeStatus {
+  enabled: boolean;
+  activeSymbols: SymbolName[];
+  maxTotalRiskPercent: number;
+  minScore: number;
+  riskMode: RiskMode;
+  riskValue: number;
+  scanIntervalSeconds: number;
+  duplicateCooldownMinutes: number;
+  lastScan: string | null;
+  lastAction: string | null;
+  blockedReason: string | null;
+  exposure: RiskExposure;
+}
+
+interface AutoScanResponse {
+  status: AutoModeStatus;
+  scanned: number;
+  eligible: number;
+  executed: number;
+  blocked: string[];
+  actions: Array<{ symbol: SymbolName; timeframe: Timeframe; score: number; accepted: boolean; ticket: number | null; message: string }>;
+}
+
 interface Signal {
   symbol: SymbolName;
   timeframe: Timeframe;
@@ -97,6 +229,27 @@ interface Signal {
   setupType: string;
   reasons: string[];
   blockedReasons: string[];
+}
+
+interface ConfluenceScoreCard {
+  symbol: SymbolName;
+  timeframe: Timeframe;
+  score: number;
+  side: "BUY" | "SELL" | null;
+  orderType: string | null;
+  setupType: string;
+  blockedReasons: string[];
+}
+
+interface StrategyRiskSettings {
+  enabled: boolean;
+  activeSymbols: SymbolName[];
+  maxTotalRiskPercent: string;
+  minScore: string;
+  riskMode: RiskMode;
+  riskValue: string;
+  scanIntervalSeconds: string;
+  duplicateCooldownMinutes: string;
 }
 
 interface HistoryItem {
@@ -123,6 +276,19 @@ interface OpenPosition {
   commission: number;
   opened_at: string;
   comment: string | null;
+}
+
+interface PositionSetupAlert {
+  ticket: number;
+  symbol: SymbolName;
+  side: "BUY" | "SELL";
+  status: "valid" | "warning" | "invalid";
+  title: string;
+  message: string;
+  checkedTimeframes: Timeframe[];
+  supportingTimeframes: Timeframe[];
+  opposingTimeframes: Timeframe[];
+  reasons: string[];
 }
 
 interface ClosePositionResponse {
@@ -210,11 +376,10 @@ interface SignalLogEntry {
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
-const symbols: SymbolName[] = ["XAUUSD", "GBPUSD", "EURUSD"];
+const symbols: SymbolName[] = ["XAUUSD", "EURUSD"];
 const timeframes: Timeframe[] = ["M15", "M30", "H1", "H4", "D1"];
 const spreadLimits: Record<SymbolName, number> = {
   XAUUSD: 350,
-  GBPUSD: 18,
   EURUSD: 18
 };
 
@@ -227,13 +392,866 @@ const defaultIndicators: Record<IndicatorKey, boolean> = {
   live: true
 };
 const SCORE_BLOCK_REASON = "Confluence score below 60";
+const INVESTING_AUTO_SYNC_SECONDS = 60;
+const defaultStrategyRiskSettings: StrategyRiskSettings = {
+  enabled: true,
+  activeSymbols: ["XAUUSD", "EURUSD"],
+  maxTotalRiskPercent: "20",
+  minScore: "60",
+  riskMode: "percent_equity",
+  riskValue: "0.5",
+  scanIntervalSeconds: "15",
+  duplicateCooldownMinutes: "10"
+};
 
 function App() {
+  const [activePage, setActivePage] = React.useState<"summary" | "settings" | "investing">("summary");
+  const [status, setStatus] = React.useState<Status | null>(null);
+  const [backendHealth, setBackendHealth] = React.useState<BackendHealth | null>(null);
+  const [positions, setPositions] = React.useState<OpenPosition[]>([]);
+  const [journal, setJournal] = React.useState<TradingJournalEntry[]>([]);
+  const [autoMode, setAutoMode] = React.useState<AutoModeStatus | null>(null);
+  const [ticks, setTicks] = React.useState<Partial<Record<SymbolName, MarketTick>>>({});
+  const [confluenceScores, setConfluenceScores] = React.useState<ConfluenceScoreCard[]>([]);
+  const [strategySettings, setStrategySettings] = React.useState<StrategyRiskSettings>(defaultStrategyRiskSettings);
+  const [investingStatus, setInvestingStatus] = React.useState<InvestingDataSync | null>(null);
+  const [investingStatuses, setInvestingStatuses] = React.useState<Partial<Record<SymbolName, InvestingDataSync>>>({});
+  const [investingTechnical, setInvestingTechnical] = React.useState<InvestingTechnicalData | null>(null);
+  const [investingTechnicals, setInvestingTechnicals] = React.useState<Partial<Record<SymbolName, InvestingTechnicalData>>>({});
+  const [settingsDirty, setSettingsDirty] = React.useState(false);
+  const [toast, setToast] = React.useState<string | null>(null);
+
+  const refreshConfluenceScores = React.useCallback(async () => {
+    const riskValue = positiveNumber(strategySettings.riskValue, Number(defaultStrategyRiskSettings.riskValue));
+    const scoreRequests = symbols.flatMap((item) =>
+      timeframes.map(async (itemTimeframe) => {
+        const signal = await fetchJson<Signal>(
+          `${API_BASE}/api/signals?symbol=${item}&timeframe=${itemTimeframe}&riskMode=${strategySettings.riskMode}&riskValue=${riskValue}`,
+          { cache: "no-store" }
+        );
+        return {
+          symbol: item,
+          timeframe: itemTimeframe,
+          score: signal.score,
+          side: signal.side,
+          orderType: signal.orderType,
+          setupType: signal.setupType,
+          blockedReasons: signal.blockedReasons
+        };
+      })
+    );
+    setConfluenceScores(await Promise.all(scoreRequests));
+  }, [strategySettings.riskMode, strategySettings.riskValue]);
+
+  const refresh = React.useCallback(async () => {
+    const [nextStatus, nextPositions, nextJournal, nextAutoMode, nextTicks, nextBackendHealth, nextInvestingStatus, nextInvestingTechnical] = await Promise.all([
+      fetchJson<Status>(`${API_BASE}/api/status`, { cache: "no-store" }),
+      fetchJson<OpenPosition[]>(`${API_BASE}/api/positions`, { cache: "no-store" }),
+      fetchJson<TradingJournalEntry[]>(`${API_BASE}/api/journal`, { cache: "no-store" }),
+      fetchJson<AutoModeStatus>(`${API_BASE}/api/auto-mode/status`, { cache: "no-store" }),
+      fetchJson<Partial<Record<SymbolName, MarketTick>>>(`${API_BASE}/api/market/ticks`, { cache: "no-store" }),
+      fetchJson<BackendHealth>(`${API_BASE}/api/backend/health`, { cache: "no-store" }),
+      fetchJson<InvestingStatusCollection>(`${API_BASE}/api/investing/status`, { cache: "no-store" }),
+      fetchJson<InvestingTechnicalCollection>(`${API_BASE}/api/investing/technical`, { cache: "no-store" })
+    ]);
+    setStatus(nextStatus);
+    setPositions(nextPositions);
+    setJournal(nextJournal);
+    setAutoMode(nextAutoMode);
+    setTicks(nextTicks);
+    setBackendHealth(nextBackendHealth);
+    const nextSyncBySymbol = normalizeInvestingStatuses(nextInvestingStatus);
+    setInvestingStatuses(nextSyncBySymbol);
+    setInvestingStatus(nextSyncBySymbol.EURUSD ?? nextSyncBySymbol.XAUUSD ?? null);
+    setInvestingTechnicals(nextInvestingTechnical.items ?? {});
+    setInvestingTechnical(nextInvestingTechnical.items?.EURUSD ?? nextInvestingTechnical.items?.XAUUSD ?? null);
+  }, []);
+
+  React.useEffect(() => {
+    refresh().catch(() => setToast("Backend belum aktif di port 9000."));
+    const timer = window.setInterval(() => {
+      refresh().catch(() => undefined);
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
+
+  React.useEffect(() => {
+    refreshConfluenceScores().catch(() => undefined);
+    const timer = window.setInterval(() => {
+      refreshConfluenceScores().catch(() => undefined);
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [refreshConfluenceScores]);
+
+  React.useEffect(() => {
+    if (!autoMode || settingsDirty) return;
+    setStrategySettings({
+      enabled: autoMode.enabled,
+      activeSymbols: autoMode.activeSymbols ?? ["XAUUSD", "EURUSD"],
+      maxTotalRiskPercent: String(autoMode.maxTotalRiskPercent),
+      minScore: String(autoMode.minScore),
+      riskMode: autoMode.riskMode,
+      riskValue: String(autoMode.riskValue),
+      scanIntervalSeconds: String(autoMode.scanIntervalSeconds),
+      duplicateCooldownMinutes: String(autoMode.duplicateCooldownMinutes)
+    });
+  }, [autoMode, settingsDirty]);
+
+  const summary = React.useMemo(() => buildSummary(status, positions, journal), [status, positions, journal]);
+  const pairRows = React.useMemo(() => buildPairRows(journal), [journal]);
+  const dailyTarget = (status?.balance ?? status?.equity ?? 0) * 0.1;
+  const dailyProgress = dailyTarget > 0 ? Math.min(Math.max((summary.dailyPnl / dailyTarget) * 100, 0), 100) : 0;
+
+  async function closePositionGroup(kind: "winning" | "losing") {
+    const selected = positions.filter((position) => (kind === "winning" ? position.profit > 0 : position.profit < 0));
+    if (selected.length === 0) {
+      setToast(`Tidak ada ${kind} trade terbuka.`);
+      return;
+    }
+    const total = selected.reduce((sum, position) => sum + position.profit, 0);
+    if (!window.confirm(`Close ${selected.length} ${kind} trade dengan floating P/L ${formatMoney(total)}?`)) return;
+    let closed = 0;
+    for (const position of selected) {
+      const response = await fetchJson<ClosePositionResponse>(`${API_BASE}/api/positions/close`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticket: position.ticket, confirmed: true })
+      });
+      if (response.accepted) closed += 1;
+    }
+    setToast(`${closed}/${selected.length} ${kind} trade closed.`);
+    refresh().catch(() => undefined);
+  }
+
+  async function closeAllPositions() {
+    if (positions.length === 0) {
+      setToast("Tidak ada posisi terbuka.");
+      return;
+    }
+    if (!window.confirm(`Close semua ${positions.length} posisi terbuka?`)) return;
+    const response = await fetchJson<ClosePositionResponse>(`${API_BASE}/api/positions/close`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ all: true, confirmed: true })
+    });
+    setToast(response.message);
+    refresh().catch(() => undefined);
+  }
+
+  async function toggleAutoMode(enabled: boolean) {
+    await saveStrategySettings({ ...strategySettings, enabled });
+    setToast(enabled ? "Full Auto ON." : "Full Auto OFF.");
+    refresh().catch(() => undefined);
+  }
+
+  function updateStrategySettings(patch: Partial<StrategyRiskSettings>) {
+    setSettingsDirty(true);
+    setStrategySettings((current) => ({ ...current, ...patch }));
+  }
+
+  async function saveStrategySettings(nextSettings = strategySettings) {
+    const payload = await fetchJson<AutoModeStatus>(`${API_BASE}/api/auto-mode`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: nextSettings.enabled,
+        activeSymbols: nextSettings.activeSymbols.length > 0 ? nextSettings.activeSymbols : ["XAUUSD", "EURUSD"],
+        maxTotalRiskPercent: clampNumber(nextSettings.maxTotalRiskPercent, 0.1, 100, 20),
+        minScore: Math.round(clampNumber(nextSettings.minScore, 0, 100, 60)),
+        riskMode: nextSettings.riskMode,
+        riskValue: positiveNumber(nextSettings.riskValue, 0.5),
+        scanIntervalSeconds: Math.round(clampNumber(nextSettings.scanIntervalSeconds, 5, 300, 15)),
+        duplicateCooldownMinutes: Math.round(clampNumber(nextSettings.duplicateCooldownMinutes, 0, 1440, 10))
+      })
+    });
+    setAutoMode(payload);
+    setStrategySettings({
+      enabled: payload.enabled,
+      activeSymbols: payload.activeSymbols ?? ["XAUUSD", "EURUSD"],
+      maxTotalRiskPercent: String(payload.maxTotalRiskPercent),
+      minScore: String(payload.minScore),
+      riskMode: payload.riskMode,
+      riskValue: String(payload.riskValue),
+      scanIntervalSeconds: String(payload.scanIntervalSeconds),
+      duplicateCooldownMinutes: String(payload.duplicateCooldownMinutes)
+    });
+    setSettingsDirty(false);
+    setToast("Strategy & risk settings saved.");
+    refresh().catch(() => undefined);
+    refreshConfluenceScores().catch(() => undefined);
+    return payload;
+  }
+
+  async function resetAllData() {
+    if (!window.confirm("Reset semua data summary? History MT5 lama akan disembunyikan dari dashboard, posisi terbuka tidak ditutup.")) return;
+    const response = await fetchJson<DataResetResponse>(`${API_BASE}/api/data/reset`, {
+      method: "POST",
+      cache: "no-store"
+    });
+    setToast(response.message);
+    refresh().catch(() => undefined);
+  }
+
+  async function syncInvestingNow() {
+    setToast("Sync Investing.com running...");
+    const response = await fetchJson<InvestingStatusCollection>(`${API_BASE}/api/investing/sync`, {
+      method: "POST",
+      cache: "no-store"
+    });
+    const nextSyncBySymbol = normalizeInvestingStatuses(response);
+    setInvestingStatuses(nextSyncBySymbol);
+    setInvestingStatus(nextSyncBySymbol.EURUSD ?? nextSyncBySymbol.XAUUSD ?? null);
+    const nextTechnical = await fetchJson<InvestingTechnicalCollection>(`${API_BASE}/api/investing/technical`, { cache: "no-store" });
+    setInvestingTechnicals(nextTechnical.items ?? {});
+    setInvestingTechnical(nextTechnical.items?.EURUSD ?? nextTechnical.items?.XAUUSD ?? null);
+    setToast(`Investing sync: ${Object.values(nextSyncBySymbol).map((item) => `${item.symbol} ${item.sync_status}`).join(", ")}`);
+    refreshConfluenceScores().catch(() => undefined);
+  }
+
+  return (
+    <main className="summary-shell">
+      <header className="summary-header">
+        <div>
+          <span className="panel-title">Account summary</span>
+          <h1>XAUGBPEUUSD</h1>
+        </div>
+        <nav className="summary-nav">
+          <button className={activePage === "summary" ? "active" : ""} onClick={() => setActivePage("summary")}>Summary</button>
+          <button className={activePage === "settings" ? "active" : ""} onClick={() => setActivePage("settings")}>Settings</button>
+          <button className={activePage === "investing" ? "active" : ""} onClick={() => setActivePage("investing")}>Investing</button>
+        </nav>
+        <div className="summary-status-row">
+          <span className={backendHealth?.active ? "summary-pill ok" : "summary-pill danger"}>{backendHealth?.active ? "Backend active" : "Backend offline"}</span>
+          <span className={status?.connected ? "summary-pill ok" : "summary-pill warn"}>{status?.connected ? "MT5 connected" : "MT5 offline"}</span>
+          <button className="summary-refresh" onClick={() => refresh().catch(() => undefined)}>Refresh</button>
+        </div>
+      </header>
+
+      {activePage === "settings" ? (
+        <StrategySettingsPage
+          settings={strategySettings}
+          autoMode={autoMode}
+          settingsDirty={settingsDirty}
+          onChange={updateStrategySettings}
+          onSave={() => saveStrategySettings().catch((error) => setToast(error.message))}
+          onReset={() => {
+            setSettingsDirty(false);
+            if (autoMode) {
+              setStrategySettings({
+                enabled: autoMode.enabled,
+                activeSymbols: autoMode.activeSymbols ?? ["XAUUSD", "EURUSD"],
+                maxTotalRiskPercent: String(autoMode.maxTotalRiskPercent),
+                minScore: String(autoMode.minScore),
+                riskMode: autoMode.riskMode,
+                riskValue: String(autoMode.riskValue),
+                scanIntervalSeconds: String(autoMode.scanIntervalSeconds),
+                duplicateCooldownMinutes: String(autoMode.duplicateCooldownMinutes)
+              });
+            } else {
+              setStrategySettings(defaultStrategyRiskSettings);
+            }
+          }}
+        />
+      ) : activePage === "investing" ? (
+        <InvestingDataPage statuses={investingStatuses} technicals={investingTechnicals} onSync={syncInvestingNow} />
+      ) : (
+        <>
+      <section className="summary-quotes top">
+        {symbols.map((item) => (
+          <div key={item} className="quote-card">
+            <span>{item}</span>
+            <strong>{formatPrice(ticks[item]?.mid ?? null)}</strong>
+            <small>Spread {formatSpread(ticks[item]?.spread_points ?? null)} pts</small>
+          </div>
+        ))}
+        <div className="quote-card">
+          <span>Full Auto</span>
+          <strong>{autoMode?.enabled ? "ON" : "OFF"}</strong>
+          <small>Total risk cap {formatPercent(autoMode?.maxTotalRiskPercent ?? 20)}</small>
+          <small>Active {formatActiveSymbols(autoMode?.activeSymbols)}</small>
+        </div>
+      </section>
+
+      <InvestingSyncCard sync={investingStatus} onSync={syncInvestingNow} />
+
+      <section className="confluence-panel">
+        <div className="summary-section-heading compact">
+          <div>
+            <span className="panel-title">Confluence score</span>
+            <h2>XAUUSD and EURUSD by timeframe</h2>
+          </div>
+          <small>M15, M30, H1 execution. H4 and D1 monitor.</small>
+        </div>
+        <div className="confluence-groups">
+          {symbols.map((item) => (
+            <div key={item} className="confluence-group">
+              <strong>{item}</strong>
+              <div className="confluence-cards">
+                {timeframes.map((itemTimeframe) => {
+                  const score = confluenceScores.find((entry) => entry.symbol === item && entry.timeframe === itemTimeframe);
+                  return <ConfluenceCard key={`${item}-${itemTimeframe}`} score={score} symbol={item} timeframe={itemTimeframe} />;
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="summary-grid">
+        <SummaryMetric title="P/L Total" value={formatMoney(summary.totalPnl)} tone={summary.totalPnl >= 0 ? "positive" : "negative"} />
+        <SummaryMetric title="P/L Daily" value={formatMoney(summary.dailyPnl)} tone={summary.dailyPnl >= 0 ? "positive" : "negative"} />
+        <SummaryMetric title="Current Position P/L" value={formatMoney(summary.floatingPnl)} tone={summary.floatingPnl >= 0 ? "positive" : "negative"} detail="Floating open positions" />
+        <SummaryMetric title="Daily Target" value={formatMoney(summary.dailyPnl)} detail={`${dailyProgress.toFixed(1)}% dari target 10% (${formatMoney(dailyTarget)})`} tone={summary.dailyPnl >= 0 ? "positive" : "negative"} />
+        <SummaryMetric title="Open Positions" value={`${positions.length}`} detail={`${summary.winningOpenCount} win / ${summary.losingOpenCount} loss`} />
+        <SummaryMetric title="Profit Factor" value={summary.profitFactorLabel} detail={`${formatMoney(summary.grossProfit)} win / ${formatMoney(summary.grossLoss)} loss`} />
+        <SummaryMetric title="Equity" value={formatMoney(status?.equity ?? 0)} detail={`Balance ${formatMoney(status?.balance ?? 0)}`} />
+      </section>
+
+      <section className="target-card">
+        <div>
+          <span className="panel-title">Daily target achieved</span>
+          <strong>{formatMoney(summary.dailyPnl)}</strong>
+          <small>Target 10%: {formatMoney(dailyTarget)} - {dailyProgress.toFixed(1)}% reached</small>
+        </div>
+        <div className="target-track">
+          <span style={{ width: `${dailyProgress}%` }} />
+        </div>
+      </section>
+
+      <section className="summary-actions">
+        <button className={autoMode?.enabled ? "auto-toggle on" : "auto-toggle off"} onClick={() => toggleAutoMode(!(autoMode?.enabled ?? false))}>
+          Full Auto {autoMode?.enabled ? "ON" : "OFF"}
+        </button>
+        <button className="close-win" onClick={() => closePositionGroup("winning")}>Close all winning trades</button>
+        <button className="close-loss" onClick={() => closePositionGroup("losing")}>Close all losing trades</button>
+        <button className="close-all" onClick={closeAllPositions}>Close all open trades</button>
+        <button className="reset-data" onClick={resetAllData}>Reset all data</button>
+      </section>
+
+      <section className="summary-table-card">
+        <div className="summary-section-heading">
+          <div>
+            <span className="panel-title">Pair performance</span>
+            <h2>Winning and losing trades by pair</h2>
+          </div>
+          <small>Closed trade journal, nominal USD.</small>
+        </div>
+        <table className="summary-table">
+          <thead>
+            <tr>
+              <th>Pair</th>
+              <th>Winning trades</th>
+              <th>Winning $</th>
+              <th>Losing trades</th>
+              <th>Losing $</th>
+              <th>Net $</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pairRows.map((row) => (
+              <tr key={row.symbol}>
+                <td>{row.symbol}</td>
+                <td>{row.wins}</td>
+                <td className="profit-text">{formatMoney(row.winUsd)}</td>
+                <td>{row.losses}</td>
+                <td className="loss-text">{formatMoney(row.lossUsd)}</td>
+                <td className={row.netUsd >= 0 ? "profit-text" : "loss-text"}>{formatMoney(row.netUsd)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="summary-table-card">
+        <div className="summary-section-heading">
+          <div>
+            <span className="panel-title">Open positions</span>
+            <h2>Current floating P/L</h2>
+          </div>
+          <small>Auto TP closes floating profit at $10.</small>
+        </div>
+        <table className="summary-table">
+          <thead>
+            <tr>
+              <th>Ticket</th>
+              <th>Pair</th>
+              <th>Side</th>
+              <th>Lot</th>
+              <th>Open</th>
+              <th>Current</th>
+              <th>Floating $</th>
+            </tr>
+          </thead>
+          <tbody>
+            {positions.length > 0 ? positions.map((position) => (
+              <tr key={position.ticket}>
+                <td>{position.ticket}</td>
+                <td>{position.symbol}</td>
+                <td>{position.side}</td>
+                <td>{position.volume.toFixed(2)}</td>
+                <td>{formatPrice(position.open_price)}</td>
+                <td>{formatPrice(position.current_price)}</td>
+                <td className={position.profit >= 0 ? "profit-text" : "loss-text"}>{formatMoney(position.profit)}</td>
+              </tr>
+            )) : (
+              <tr>
+                <td colSpan={7}>No open positions.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </section>
+        </>
+      )}
+
+      {toast && <div className="toast">{toast}</div>}
+    </main>
+  );
+}
+
+function SummaryMetric({ title, value, detail, tone }: { title: string; value: string; detail?: string; tone?: "positive" | "negative" }) {
+  return (
+    <article className={`summary-metric ${tone ?? ""}`}>
+      <span>{title}</span>
+      <strong>{value}</strong>
+      {detail ? <small>{detail}</small> : null}
+    </article>
+  );
+}
+
+function InvestingSyncCard({ sync, onSync }: { sync: InvestingDataSync | null; onSync: () => void }) {
+  const status = sync?.sync_status ?? "BLOCKED";
+  const allowed = sync?.strategy_use === "ALLOWED";
+  return (
+    <section className={`investing-sync-card ${allowed ? "allowed" : "blocked"}`}>
+      <div className="summary-section-heading compact">
+        <div>
+          <span className="panel-title">Investing Data Sync</span>
+          <h2>{sync?.symbol ?? "EURUSD"} technical confirmation</h2>
+        </div>
+        <button className="settings-secondary" onClick={onSync}>Sync now</button>
+      </div>
+      <div className="investing-sync-grid">
+        <Metric label="Sync status" value={status} />
+        <Metric label="Auto sync" value={`Every ${Math.round(INVESTING_AUTO_SYNC_SECONDS / 60)}m`} />
+        <Metric label="Last sync" value={sync?.last_sync_utc ? formatDateLabel(sync.last_sync_utc) : "--"} />
+        <Metric label="Data mode" value={sync?.data_mode ?? "NONE"} />
+        <Metric label="Strategy use" value={sync?.strategy_use ?? "BLOCKED"} />
+        <Metric label="Retry" value={`${sync?.retry_attempt ?? 0} / ${sync?.retry_max ?? 3}`} />
+        <Metric label="Cache age" value={sync?.cache_age_seconds === null || sync?.cache_age_seconds === undefined ? "--" : `${Math.round(sync.cache_age_seconds / 60)}m`} />
+        <Metric label="Parser" value={sync?.parser_status ?? "FAILED"} />
+      </div>
+      <small>{sync?.message ?? "Investing.com sync belum tersedia."}{sync?.error ? ` Error: ${sync.error}` : ""}</small>
+    </section>
+  );
+}
+
+function InvestingDataPage({ statuses, technicals, onSync }: { statuses: Partial<Record<SymbolName, InvestingDataSync>>; technicals: Partial<Record<SymbolName, InvestingTechnicalData>>; onSync: () => void }) {
+  return (
+    <section className="investing-page">
+      <div className="summary-section-heading">
+        <div>
+          <span className="panel-title">Investing.com technical data</span>
+          <h2>XAUUSD and EURUSD synced datasets</h2>
+        </div>
+        <div className="investing-auto-sync-summary">
+          <span>Auto sync every {Math.round(INVESTING_AUTO_SYNC_SECONDS / 60)} minute</span>
+          <button className="summary-refresh" onClick={onSync}>Sync now</button>
+        </div>
+      </div>
+
+      {symbols.map((symbol) => (
+        <InvestingSymbolData key={symbol} symbol={symbol} sync={statuses[symbol] ?? null} technical={technicals[symbol] ?? null} onSync={onSync} />
+      ))}
+    </section>
+  );
+}
+
+function InvestingSymbolData({ symbol, sync, technical, onSync }: { symbol: SymbolName; sync: InvestingDataSync | null; technical: InvestingTechnicalData | null; onSync: () => void }) {
+  const summary = technical?.summary;
+  const activeTimeframe = technical?.selected_timeframe ?? "1h";
+  const activeTimeframeSignal = technical?.timeframe_signals?.[activeTimeframe];
+  return (
+    <section className="investing-symbol-section">
+      <InvestingSyncCard sync={sync} onSync={onSync} />
+
+      <section className="investing-overview-card">
+        <div className="summary-section-heading compact">
+          <div>
+            <span className="panel-title">{symbol}</span>
+            <h2>Investing confirmation snapshot</h2>
+          </div>
+        </div>
+        <div className="investing-overview-grid">
+          <article>
+            <span>Overall bias</span>
+            <strong className={investingToneClass(summary?.overall)}>{formatInvestingCode(summary?.overall)}</strong>
+            <small>Full technical summary</small>
+          </article>
+          <article>
+            <span>Selected detail TF</span>
+            <strong>{technical?.selected_timeframe_label ?? activeTimeframe}</strong>
+            <small>{activeTimeframeSignal?.signal?.label ?? "Detail table source"}</small>
+          </article>
+          <article>
+            <span>Last sync</span>
+            <strong>{technical?.scraped_at_utc ? formatDateLabel(technical.scraped_at_utc) : "--"}</strong>
+            <small>{sync?.data_mode ?? "NONE"} data mode</small>
+          </article>
+          <article>
+            <span>Pivot source</span>
+            <strong>{formatPivotSource(technical?.pivot_parser_status)}</strong>
+            <small>{technical?.pivot_url ?? technical?.sources?.pivot_fibonacci ? "Fibonacci levels available" : "No pivot URL"}</small>
+          </article>
+        </div>
+        {technical?.pivot_error ? <p className="investing-error">Pivot Fibonacci: {technical.pivot_error}</p> : null}
+      </section>
+
+      <section className="investing-data-card">
+        <div className="summary-section-heading compact">
+          <div>
+            <span className="panel-title">{symbol}</span>
+            <h2>Technical bias</h2>
+          </div>
+        </div>
+        <div className="investing-meta-grid">
+          <Metric label="Overall" value={formatInvestingCode(summary?.overall)} />
+          <Metric label="Moving average" value={formatInvestingCode(summary?.moving_average?.signal)} />
+          <Metric label="MA buy/sell" value={`${summary?.moving_average?.buy ?? 0} / ${summary?.moving_average?.sell ?? 0}`} />
+          <Metric label="Indicators" value={formatInvestingCode(summary?.technical_indicators?.signal)} />
+          <Metric label="Indicator buy/sell" value={`${summary?.technical_indicators?.buy ?? 0} / ${summary?.technical_indicators?.sell ?? 0}`} />
+        </div>
+      </section>
+
+      <InvestingTimeframeTable symbol={symbol} technical={technical} />
+      <InvestingTable title={`${symbol} technical indicators`} items={technical?.indicators ?? {}} columns={["Name", "Value", "Action", "Raw"]} />
+      <InvestingTable title={`${symbol} moving averages`} items={technical?.moving_averages ?? {}} columns={["Name", "Value", "Action", "Raw"]} />
+      <InvestingPivotTable title={`${symbol} Fibonacci pivot levels`} items={technical?.pivot_points ?? {}} />
+    </section>
+  );
+}
+
+function InvestingTimeframeTable({ symbol, technical }: { symbol: SymbolName; technical: InvestingTechnicalData | null }) {
+  const entries = Object.entries(technical?.timeframe_signals ?? {});
+  const appMap = technical?.app_timeframe_map ?? {};
+  const mappedAppLabels = (investingKey: string) =>
+    Object.entries(appMap)
+      .filter(([, value]) => value === investingKey)
+      .map(([key]) => key)
+      .join(", ") || "--";
+  return (
+    <section className="summary-table-card">
+      <div className="summary-section-heading compact">
+        <div>
+          <span className="panel-title">Investing.com timeframe</span>
+          <h2>{symbol} timeframe confirmation map</h2>
+        </div>
+        <small>Confluence timeframe is checked against the matching Investing timeframe.</small>
+      </div>
+      <table className="summary-table investing-table">
+        <thead>
+          <tr>
+            <th>Investing TF</th>
+            <th>Used by app TF</th>
+            <th>Signal</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {entries.length > 0 ? entries.map(([key, item]) => (
+            <tr key={key}>
+              <td>{item.mapped_label ?? key}{item.active ? " (selected detail)" : ""}</td>
+              <td>{mappedAppLabels(key)}</td>
+              <td>{item.signal?.label ?? "--"} ({item.signal?.code ?? "--"})</td>
+              <td>{item.locked ? "Locked by Investing" : "Available"}</td>
+            </tr>
+          )) : (
+            <tr><td colSpan={4}>No Investing timeframe signal.</td></tr>
+          )}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function InvestingPivotTable({ title, items }: { title: string; items: Record<string, InvestingTechnicalItem> }) {
+  const order = ["S3", "S2", "S1", "PIVOT", "R1", "R2", "R3"];
+  const rows = order
+    .filter((level) => items[level])
+    .map((level) => [level, items[level]] as const);
+  return (
+    <section className="summary-table-card pivot-level-card">
+      <div className="summary-section-heading compact">
+        <div>
+          <span className="panel-title">Investing.com Fibonacci</span>
+          <h2>{title}</h2>
+        </div>
+        <small>{rows.length} level</small>
+      </div>
+      <table className="summary-table pivot-table">
+        <thead>
+          <tr>
+            <th>Level</th>
+            <th>Type</th>
+            <th>Price</th>
+            <th>Distance</th>
+            <th>Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length > 0 ? rows.map(([level, item]) => (
+            <tr key={level} className={`pivot-row ${pivotType(level).toLowerCase()}`}>
+              <td><span className={`pivot-level ${pivotType(level).toLowerCase()}`}>{level}</span></td>
+              <td>{pivotType(level)}</td>
+              <td className="pivot-price">{formatInvestingPrice(item.value)}</td>
+              <td>{pivotDistance(level)}</td>
+              <td>{formatPivotSource(item.source)}</td>
+            </tr>
+          )) : (
+            <tr><td colSpan={5}>No synced pivot level.</td></tr>
+          )}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function InvestingTable({ title, items, columns }: { title: string; items: Record<string, InvestingTechnicalItem>; columns: string[] }) {
+  const rows = Object.entries(items);
+  return (
+    <section className="summary-table-card">
+      <div className="summary-section-heading compact">
+        <div>
+          <span className="panel-title">Investing.com</span>
+          <h2>{title}</h2>
+        </div>
+        <small>{rows.length} item</small>
+      </div>
+      <table className="summary-table investing-table">
+        <thead>
+          <tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr>
+        </thead>
+        <tbody>
+          {rows.length > 0 ? rows.map(([name, item]) => (
+            <tr key={name}>
+              <td>{name}</td>
+              <td>{item.value === null || item.value === undefined ? "--" : item.value}</td>
+              <td>{item.action ? `${item.action.label} (${item.action.code})` : "--"}</td>
+              <td>{item.raw?.join(" | ") ?? "--"}</td>
+            </tr>
+          )) : (
+            <tr><td colSpan={columns.length}>No synced data.</td></tr>
+          )}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function StrategySettingsPage({
+  settings,
+  autoMode,
+  settingsDirty,
+  onChange,
+  onSave,
+  onReset
+}: {
+  settings: StrategyRiskSettings;
+  autoMode: AutoModeStatus | null;
+  settingsDirty: boolean;
+  onChange: (patch: Partial<StrategyRiskSettings>) => void;
+  onSave: () => void;
+  onReset: () => void;
+}) {
+  const exposure = autoMode?.exposure;
+  return (
+    <section className="settings-page">
+      <div className="summary-section-heading">
+        <div>
+          <span className="panel-title">Strategy & risk settings</span>
+          <h2>Cocokkan parameter auto strategy</h2>
+        </div>
+        <small>Perubahan aktif setelah Save settings.</small>
+      </div>
+
+      <div className="settings-layout">
+        <section className="settings-card">
+          <div className="settings-card-heading">
+            <strong>Automation</strong>
+            <span className={settings.enabled ? "settings-state on" : "settings-state off"}>{settings.enabled ? "ON" : "OFF"}</span>
+          </div>
+          <label className="settings-toggle">
+            <input type="checkbox" checked={settings.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} />
+            <span>Full Auto enabled</span>
+          </label>
+          <SettingsNumber label="Minimum confluence score" value={settings.minScore} min={0} max={100} step={1} suffix="score" onChange={(value) => onChange({ minScore: value })} />
+          <SettingsNumber label="Scan interval" value={settings.scanIntervalSeconds} min={5} max={300} step={1} suffix="seconds" onChange={(value) => onChange({ scanIntervalSeconds: value })} />
+          <SettingsNumber label="Duplicate cooldown" value={settings.duplicateCooldownMinutes} min={0} max={1440} step={1} suffix="minutes" onChange={(value) => onChange({ duplicateCooldownMinutes: value })} />
+          <div className="settings-field">
+            <span>Active trade pairs</span>
+            <div className="pair-toggle-grid">
+              {symbols.map((symbol) => (
+                <label key={symbol} className={settings.activeSymbols.includes(symbol) ? "pair-toggle active" : "pair-toggle"}>
+                  <input
+                    type="checkbox"
+                    checked={settings.activeSymbols.includes(symbol)}
+                    onChange={(event) => {
+                      const nextSymbols = event.target.checked
+                        ? Array.from(new Set([...settings.activeSymbols, symbol]))
+                        : settings.activeSymbols.filter((item) => item !== symbol);
+                      onChange({ activeSymbols: nextSymbols });
+                    }}
+                  />
+                  <span>{symbol}</span>
+                </label>
+              ))}
+            </div>
+            <small>Pair nonaktif tetap tampil di data, tetapi tidak boleh auto-entry.</small>
+          </div>
+        </section>
+
+        <section className="settings-card">
+          <div className="settings-card-heading">
+            <strong>Risk</strong>
+            <span>{formatPercent(exposure?.totalRiskPercent)} used</span>
+          </div>
+          <label className="settings-field">
+            <span>Risk mode</span>
+            <select value={settings.riskMode} onChange={(event) => onChange({ riskMode: event.target.value as RiskMode })}>
+              <option value="percent_equity">Percent equity</option>
+              <option value="fixed_lot">Fixed lot</option>
+              <option value="fixed_usd">Fixed USD</option>
+            </select>
+          </label>
+          <SettingsNumber label="Risk value per order" value={settings.riskValue} min={0.01} step={0.01} suffix={riskModeSuffix(settings.riskMode)} onChange={(value) => onChange({ riskValue: value })} />
+          <SettingsNumber label="Total risk cap" value={settings.maxTotalRiskPercent} min={0.1} max={100} step={0.1} suffix="%" onChange={(value) => onChange({ maxTotalRiskPercent: value })} />
+          <div className="settings-risk-preview">
+            <Metric label="Total risk" value={`${formatPercent(exposure?.totalRiskPercent)} / ${formatPercent(autoMode?.maxTotalRiskPercent ?? 20)}`} />
+            <Metric label="Available" value={formatPercent(exposure?.availableRiskPercent)} />
+            <Metric label="Open risk items" value={`${exposure?.items?.length ?? 0}`} />
+          </div>
+        </section>
+
+        <section className="settings-card settings-guide">
+          <div className="settings-card-heading">
+            <strong>Execution rules</strong>
+            <span>{settingsDirty ? "Unsaved" : "Synced"}</span>
+          </div>
+          <div className="settings-rule-list">
+            <span>M15, M30, H1 = execution timeframe</span>
+            <span>H4, D1 = monitor/context only</span>
+            <span>Lot max per position tetap 0.10</span>
+            <span>Auto TP tetap close saat floating profit {">="} $10</span>
+            <span>Pair aktif auto-entry: {formatActiveSymbols(settings.activeSymbols)}</span>
+          </div>
+        </section>
+      </div>
+
+      <div className="settings-actions">
+        <button className="summary-refresh" onClick={onSave}>Save settings</button>
+        <button className="settings-secondary" onClick={onReset}>Reset form</button>
+      </div>
+    </section>
+  );
+}
+
+function SettingsNumber({
+  label,
+  value,
+  min,
+  max,
+  step,
+  suffix,
+  onChange
+}: {
+  label: string;
+  value: string;
+  min: number;
+  max?: number;
+  step: number;
+  suffix: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="settings-field">
+      <span>{label}</span>
+      <div className="settings-input-row">
+        <input type="number" value={value} min={min} max={max} step={step} onChange={(event) => onChange(event.target.value)} />
+        <small>{suffix}</small>
+      </div>
+    </label>
+  );
+}
+
+function ConfluenceCard({ score, symbol, timeframe }: { score: ConfluenceScoreCard | undefined; symbol: SymbolName; timeframe: Timeframe }) {
+  const value = score?.score ?? null;
+  const tone = value === null ? "loading" : value >= 60 ? "ready" : value >= 45 ? "watch" : "blocked";
+  const actionLabel = score?.side ?? "NO TRADE";
+  const reason = score?.blockedReasons.find((item) => item !== SCORE_BLOCK_REASON) ?? score?.setupType ?? "Loading";
+  return (
+    <article className={`confluence-card ${tone}`}>
+      <div className="confluence-card-top">
+        <span>{timeframe}</span>
+        <small>{timeframe === "H4" || timeframe === "D1" ? "Monitor" : "Exec"}</small>
+      </div>
+      <strong>{value === null ? "--" : value}</strong>
+      <div className="confluence-action">
+        <span>{actionLabel}</span>
+        <small>{symbol}</small>
+      </div>
+      <p>{reason}</p>
+    </article>
+  );
+}
+
+function buildSummary(status: Status | null, positions: OpenPosition[], journal: TradingJournalEntry[]) {
+  const floatingPnl = positions.reduce((sum, position) => sum + position.profit, 0);
+  const closedPnl = journal.reduce((sum, entry) => sum + (entry.profit ?? 0), 0);
+  const todayKey = localDateKey(new Date());
+  const dailyClosedPnl = journal
+    .filter((entry) => localDateKey(new Date(entry.time)) === todayKey)
+    .reduce((sum, entry) => sum + (entry.profit ?? 0), 0);
+  const grossProfit = journal.reduce((sum, entry) => sum + Math.max(entry.profit ?? 0, 0), 0);
+  const grossLoss = Math.abs(journal.reduce((sum, entry) => sum + Math.min(entry.profit ?? 0, 0), 0));
+  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0;
+  return {
+    totalPnl: closedPnl,
+    dailyPnl: dailyClosedPnl,
+    floatingPnl,
+    grossProfit,
+    grossLoss,
+    profitFactorLabel: Number.isFinite(profitFactor) ? profitFactor.toFixed(2) : "∞",
+    winningOpenCount: positions.filter((position) => position.profit > 0).length,
+    losingOpenCount: positions.filter((position) => position.profit < 0).length,
+    accountCurrency: status?.currency ?? "USD"
+  };
+}
+
+function buildPairRows(journal: TradingJournalEntry[]) {
+  return symbols.map((symbol) => {
+    const entries = journal.filter((entry) => entry.symbol === symbol);
+    const wins = entries.filter((entry) => (entry.profit ?? 0) > 0);
+    const losses = entries.filter((entry) => (entry.profit ?? 0) < 0);
+    const winUsd = wins.reduce((sum, entry) => sum + (entry.profit ?? 0), 0);
+    const lossUsd = losses.reduce((sum, entry) => sum + (entry.profit ?? 0), 0);
+    return {
+      symbol,
+      wins: wins.length,
+      losses: losses.length,
+      winUsd,
+      lossUsd,
+      netUsd: winUsd + lossUsd
+    };
+  });
+}
+
+function LegacyApp() {
   const [symbol, setSymbol] = React.useState<SymbolName>("XAUUSD");
   const [timeframe, setTimeframe] = React.useState<Timeframe>("H1");
   const [riskMode, setRiskMode] = React.useState<RiskMode>("percent_equity");
   const [riskValue, setRiskValue] = React.useState("0.5");
   const [status, setStatus] = React.useState<Status | null>(null);
+  const [backendHealth, setBackendHealth] = React.useState<BackendHealth | null>(null);
   const [snapshot, setSnapshot] = React.useState<Snapshot | null>(null);
   const [watchSnapshots, setWatchSnapshots] = React.useState<Partial<Record<SymbolName, Snapshot>>>({});
   const [ticks, setTicks] = React.useState<Partial<Record<SymbolName, MarketTick>>>({});
@@ -242,13 +1260,23 @@ function App() {
   const [signal, setSignal] = React.useState<Signal | null>(null);
   const [history, setHistory] = React.useState<HistoryItem[]>([]);
   const [positions, setPositions] = React.useState<OpenPosition[]>([]);
+  const [positionAlerts, setPositionAlerts] = React.useState<PositionSetupAlert[]>([]);
   const [journal, setJournal] = React.useState<TradingJournalEntry[]>([]);
   const [trailingRules, setTrailingRules] = React.useState<TrailingRules>({ triggerPips: "5", distancePips: "3", stepPips: "1" });
   const [calendar, setCalendar] = React.useState<EconomicCalendarResponse | null>(null);
   const [signalLog, setSignalLog] = React.useState<SignalLogEntry[]>([]);
+  const [autoMode, setAutoMode] = React.useState<AutoModeStatus | null>(null);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [toast, setToast] = React.useState<string | null>(null);
   const tickRequestId = React.useRef(0);
+
+  const refreshBackendHealth = React.useCallback(async () => {
+    try {
+      setBackendHealth(await fetchJson<BackendHealth>(`${API_BASE}/api/backend/health`, { cache: "no-store" }));
+    } catch {
+      setBackendHealth(null);
+    }
+  }, []);
 
   const refreshTicks = React.useCallback(async () => {
     const requestId = ++tickRequestId.current;
@@ -261,14 +1289,16 @@ function App() {
   const refresh = React.useCallback(async () => {
     const query = `symbol=${symbol}&timeframe=${timeframe}`;
     const safeRiskValue = sanitizeRiskValue(riskValue);
-    const [nextStatus, nextSignal, nextHistory, nextPositions, nextJournal, nextCalendar, nextSignalLog, activeSnapshot, watchResults] = await Promise.all([
+    const [nextStatus, nextSignal, nextHistory, nextPositions, nextPositionAlerts, nextJournal, nextCalendar, nextSignalLog, nextAutoMode, activeSnapshot, watchResults] = await Promise.all([
       fetchJson<Status>(`${API_BASE}/api/status`),
       fetchJson<Signal>(`${API_BASE}/api/signals?${query}&riskMode=${riskMode}&riskValue=${safeRiskValue}`),
       fetchJson<HistoryItem[]>(`${API_BASE}/api/history`),
       fetchJson<OpenPosition[]>(`${API_BASE}/api/positions`, { cache: "no-store" }),
+      fetchJson<PositionSetupAlert[]>(`${API_BASE}/api/positions/alerts`, { cache: "no-store" }),
       fetchJson<TradingJournalEntry[]>(`${API_BASE}/api/journal`, { cache: "no-store" }),
       fetchJson<EconomicCalendarResponse>(`${API_BASE}/api/economic-calendar`, { cache: "no-store" }),
       fetchJson<SignalLogEntry[]>(`${API_BASE}/api/signal-log?limit=80`, { cache: "no-store" }),
+      fetchJson<AutoModeStatus>(`${API_BASE}/api/auto-mode/status`, { cache: "no-store" }),
       fetchJson<Snapshot>(`${API_BASE}/api/market/snapshot?${query}`, { cache: "no-store" }),
       Promise.all(
         symbols.map(async (item) => {
@@ -283,9 +1313,11 @@ function App() {
     setSignal(nextSignal);
     setHistory(nextHistory);
     setPositions(nextPositions);
+    setPositionAlerts(nextPositionAlerts);
     setJournal(nextJournal);
     setCalendar(nextCalendar);
     setSignalLog(nextSignalLog);
+    setAutoMode(nextAutoMode);
     await refreshTicks();
   }, [refreshTicks, riskMode, riskValue, symbol, timeframe]);
 
@@ -298,9 +1330,31 @@ function App() {
     setSignalLog(await fetchJson<SignalLogEntry[]>(`${API_BASE}/api/signal-log?limit=80`, { cache: "no-store" }));
   }, [riskMode, riskValue]);
 
-  React.useEffect(() => {
-    refresh().catch(() => setToast("Backend belum aktif. Jalankan FastAPI di port 8000."));
+  const runAutoScan = React.useCallback(async () => {
+    const response = await fetchJson<AutoScanResponse>(`${API_BASE}/api/auto-mode/scan-now`, {
+      method: "POST",
+      cache: "no-store"
+    });
+    setAutoMode(response.status);
+    if (response.executed > 0) {
+      setToast(`Full Auto executed ${response.executed} order(s).`);
+    } else if (response.blocked.length > 0) {
+      setToast(response.blocked[response.blocked.length - 1]);
+    }
+    refresh().catch(() => undefined);
   }, [refresh]);
+
+  React.useEffect(() => {
+    refreshBackendHealth().catch(() => undefined);
+    refresh().catch(() => setToast("Backend belum aktif. Jalankan FastAPI di port 9000."));
+  }, [refresh, refreshBackendHealth]);
+
+  React.useEffect(() => {
+    const timer = window.setInterval(() => {
+      refreshBackendHealth().catch(() => undefined);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [refreshBackendHealth]);
 
   React.useEffect(() => {
     const timer = window.setInterval(() => {
@@ -324,6 +1378,15 @@ function App() {
     }, 60000);
     return () => window.clearInterval(timer);
   }, [scanPotentialSignals]);
+
+  React.useEffect(() => {
+    if (!autoMode?.enabled) return;
+    const intervalMs = Math.max(autoMode.scanIntervalSeconds, 5) * 1000;
+    const timer = window.setInterval(() => {
+      runAutoScan().catch(() => undefined);
+    }, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [autoMode?.enabled, autoMode?.scanIntervalSeconds, runAutoScan]);
 
   const mt5BlockedReason = status?.connected ? null : "MT5 is offline";
   const tradeBlockedReason =
@@ -394,6 +1457,42 @@ function App() {
     refresh().catch(() => undefined);
   }
 
+  async function restartBackend() {
+    if (!window.confirm("Restart backend now? App may be offline for a few seconds.")) return;
+    const response = await fetchJson<BackendRestartResponse>(`${API_BASE}/api/backend/restart`, {
+      method: "POST",
+      cache: "no-store"
+    });
+    setToast(response.message);
+    setBackendHealth(null);
+    window.setTimeout(() => {
+      refreshBackendHealth().catch(() => undefined);
+      refresh().catch(() => undefined);
+    }, 3500);
+  }
+
+  async function toggleAutoMode(enabled: boolean) {
+    const safeRiskValue = sanitizeRiskValue(riskValue);
+    const payload = await fetchJson<AutoModeStatus>(`${API_BASE}/api/auto-mode`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled,
+        maxTotalRiskPercent: 20,
+        minScore: 60,
+        riskMode,
+        riskValue: safeRiskValue,
+        scanIntervalSeconds: 15,
+        duplicateCooldownMinutes: 10
+      })
+    });
+    setAutoMode(payload);
+    setToast(enabled ? "Full Auto ON. Orders can be sent automatically with 20% total risk cap." : "Full Auto OFF.");
+    if (enabled) {
+      runAutoScan().catch(() => undefined);
+    }
+  }
+
   async function closePosition(payload: { ticket?: number; symbol?: SymbolName; all?: boolean }) {
     const target = payload.all ? "ALL open positions" : payload.ticket ? `ticket ${payload.ticket}` : payload.symbol ? `one ${payload.symbol} position` : "position";
     if (!window.confirm(`Close ${target} now?`)) return;
@@ -427,12 +1526,16 @@ function App() {
     <main className="app-shell">
       <TopBar
         status={status}
+        backendHealth={backendHealth}
         symbol={symbol}
         timeframe={timeframe}
         onSymbol={setSymbol}
         onTimeframe={setTimeframe}
         onRefresh={refresh}
+        onRestartBackend={restartBackend}
         onDemoGuard={toggleDemoGuard}
+        autoMode={autoMode}
+        onAutoMode={toggleAutoMode}
       />
       <section className="workspace">
         <Watchlist active={symbol} snapshots={watchSnapshots} ticks={ticks} onSelect={setSymbol} />
@@ -447,35 +1550,43 @@ function App() {
           <CandlestickChart snapshot={snapshot} tick={activeTick} indicators={indicators} />
           <ChartInsights snapshot={snapshot} tick={activeTick} />
         </section>
-        <SignalPanel
-          signal={signal}
-          riskMode={riskMode}
-          riskValue={riskValue}
-          spreadPoints={activeTick?.spread_points ?? snapshot?.spread_points ?? null}
-          symbol={symbol}
-          hardBlockedReasons={hardBlockedReasons}
-          scoreWarningReasons={scoreWarningReasons}
-          onRiskMode={setRiskMode}
-          onRiskValue={setRiskValue}
-          executable={executable}
-          executeLabel={executeLabel}
-          onExecute={() => setConfirmOpen(true)}
-        />
+        <aside className="right-rail">
+          <AutoModeCard autoMode={autoMode} onScanNow={runAutoScan} />
+          <SignalPanel
+            signal={signal}
+            riskMode={riskMode}
+            riskValue={riskValue}
+            spreadPoints={activeTick?.spread_points ?? snapshot?.spread_points ?? null}
+            symbol={symbol}
+            hardBlockedReasons={hardBlockedReasons}
+            scoreWarningReasons={scoreWarningReasons}
+            onRiskMode={setRiskMode}
+            onRiskValue={setRiskValue}
+            executable={executable}
+            executeLabel={executeLabel}
+            onExecute={() => setConfirmOpen(true)}
+          />
+          <EconomicCalendarBox calendar={calendar} activeSymbol={symbol} compact />
+        </aside>
       </section>
-      <PositionCard
-        positions={positions}
-        journal={journal}
-        activeSymbol={symbol}
-        trailingRules={trailingRules}
-        onTrailingRules={setTrailingRules}
-        onApplyTrailing={applyTrailingStop}
-        onCloseAll={() => closePosition({ all: true })}
-        onCloseTicket={(ticket) => closePosition({ ticket })}
-        onCloseSymbol={(item) => closePosition({ symbol: item })}
-      />
-      <HistoryTable items={history} />
-      <SignalLogTable items={signalLog} />
-      <EconomicCalendarBox calendar={calendar} activeSymbol={symbol} />
+      <section className="operations-grid">
+        <PositionCard
+          positions={positions}
+          alerts={positionAlerts}
+          journal={journal}
+          activeSymbol={symbol}
+          trailingRules={trailingRules}
+          onTrailingRules={setTrailingRules}
+          onApplyTrailing={applyTrailingStop}
+          onCloseAll={() => closePosition({ all: true })}
+          onCloseTicket={(ticket) => closePosition({ ticket })}
+          onCloseSymbol={(item) => closePosition({ symbol: item })}
+        />
+        <div className="data-stack">
+          <HistoryTable items={history} />
+          <SignalLogTable items={signalLog} />
+        </div>
+      </section>
       {confirmOpen && signal && snapshot && (
         <ConfirmModal
           signal={signal}
@@ -498,23 +1609,31 @@ function App() {
 
 function TopBar({
   status,
+  backendHealth,
   symbol,
   timeframe,
   onSymbol,
   onTimeframe,
   onRefresh,
-  onDemoGuard
+  onRestartBackend,
+  onDemoGuard,
+  autoMode,
+  onAutoMode
 }: {
   status: Status | null;
+  backendHealth: BackendHealth | null;
   symbol: SymbolName;
   timeframe: Timeframe;
   onSymbol: (value: SymbolName) => void;
   onTimeframe: (value: Timeframe) => void;
   onRefresh: () => void;
+  onRestartBackend: () => void;
   onDemoGuard: (enabled: boolean) => void;
+  autoMode: AutoModeStatus | null;
+  onAutoMode: (enabled: boolean) => void;
 }) {
   const guardEnabled = status?.demo_guard_enabled ?? true;
-  const accountLabel = status?.connected ? (status.demo_mode ? "Demo account" : "Non-demo account") : "Account pending";
+  const autoEnabled = autoMode?.enabled ?? false;
   const tradeLabel = status?.connected ? (status.trade_ready ? "Trading enabled" : "AutoTrading OFF") : "Trading pending";
   return (
     <header className="topbar">
@@ -527,6 +1646,14 @@ function TopBar({
           <span>Exness MT5 execution guard</span>
         </div>
       </div>
+      <button
+        className={`backend-chip ${backendHealth?.active ? "active" : "offline"}`}
+        onClick={onRestartBackend}
+        title={backendHealth?.active ? `Backend active. PID ${backendHealth.pid}. Click to restart backend.` : "Backend offline. Click to try restart."}
+      >
+        <Activity size={15} />
+        <span>{backendHealth?.active ? "Backend Active" : "Backend Offline"}</span>
+      </button>
       <div className={`connection ${status?.connected ? "connected" : "offline"}`} title={status?.message}>
         <PlugZap size={16} />
         <span>{status?.connected ? "MT5 Connected" : "MT5 Offline"}</span>
@@ -539,7 +1666,14 @@ function TopBar({
         <ShieldCheck size={15} />
         <span>Demo guard {guardEnabled ? "ON" : "OFF"}</span>
       </button>
-      <div className={`account-chip ${status?.demo_mode ? "demo" : status?.connected ? "live" : ""}`}>{accountLabel}</div>
+      <button
+        className={`auto-chip ${autoEnabled ? "active" : "off"}`}
+        onClick={() => onAutoMode(!autoEnabled)}
+        title={autoEnabled ? "Turn Full Auto OFF" : "Turn Full Auto ON"}
+      >
+        <Activity size={15} />
+        <span>Full Auto {autoEnabled ? "ON" : "OFF"}</span>
+      </button>
       <div className={`trade-chip ${status?.trade_ready ? "ready" : status?.connected ? "blocked" : ""}`}>{tradeLabel}</div>
       <Selector value={symbol} options={symbols} onChange={(value) => onSymbol(value as SymbolName)} />
       <Selector value={timeframe} options={timeframes} onChange={(value) => onTimeframe(value as Timeframe)} />
@@ -551,6 +1685,42 @@ function TopBar({
         <Activity size={18} />
       </button>
     </header>
+  );
+}
+
+function AutoModeCard({ autoMode, onScanNow }: { autoMode: AutoModeStatus | null; onScanNow: () => void }) {
+  const exposure = autoMode?.exposure;
+  const enabled = autoMode?.enabled ?? false;
+  return (
+    <section className={`auto-mode-card ${enabled ? "enabled" : "disabled"}`}>
+      <div className="auto-mode-heading">
+        <div>
+          <span className="panel-title">Full Auto</span>
+          <h2>{enabled ? "Automatic execution ON" : "Automatic execution OFF"}</h2>
+        </div>
+        <span className={`auto-state ${enabled ? "on" : "off"}`}>{enabled ? "ON" : "OFF"}</span>
+      </div>
+      {enabled && (
+        <div className="auto-warning">
+          <AlertTriangle size={15} />
+          <span>Order dapat dikirim otomatis tanpa modal per order, tetap demo guard dan total risk cap aktif.</span>
+        </div>
+      )}
+      <div className="auto-risk-grid">
+        <Metric label="Total risk" value={`${formatPercent(exposure?.totalRiskPercent)} / ${formatPercent(autoMode?.maxTotalRiskPercent ?? 20)}`} />
+        <Metric label="Available" value={formatPercent(exposure?.availableRiskPercent)} />
+        <Metric label="Min score" value={`${autoMode?.minScore ?? 60}+`} />
+        <Metric label="Interval" value={`${autoMode?.scanIntervalSeconds ?? 15}s`} />
+      </div>
+      {autoMode?.blockedReason && <div className="auto-blocked">{autoMode.blockedReason}</div>}
+      <div className="auto-meta">
+        <span>Last scan: {autoMode?.lastScan ? formatDateLabel(autoMode.lastScan) : "--"}</span>
+        <span>{autoMode?.lastAction ?? "No auto action yet"}</span>
+      </div>
+      <button className="scan-now-button" disabled={!enabled} onClick={onScanNow}>
+        Scan now
+      </button>
+    </section>
   );
 }
 
@@ -1077,7 +2247,7 @@ function SignalPanel({
       ) : (
         <div className="no-execute">No executable order until MT5, order levels, spread, and risk checks pass.</div>
       )}
-      <p className="fine-print">One relevant action only. Confirmation modal is required before MT5 order send.</p>
+      <p className="fine-print">One relevant action only. Max lot per position is 0.10 and confirmation is required before MT5 order send.</p>
     </aside>
   );
 }
@@ -1120,6 +2290,7 @@ function uniqueStrings(values: string[]) {
 
 function PositionCard({
   positions,
+  alerts,
   journal,
   activeSymbol,
   trailingRules,
@@ -1130,6 +2301,7 @@ function PositionCard({
   onCloseSymbol
 }: {
   positions: OpenPosition[];
+  alerts: PositionSetupAlert[];
   journal: TradingJournalEntry[];
   activeSymbol: SymbolName;
   trailingRules: TrailingRules;
@@ -1144,12 +2316,14 @@ function PositionCard({
   const realizedPnl = journal.reduce((sum, item) => sum + (item.profit ?? 0), 0);
   const winningTrades = journal.filter((item) => (item.profit ?? 0) > 0).length;
   const losingTrades = journal.filter((item) => (item.profit ?? 0) < 0).length;
+  const alertByTicket = React.useMemo(() => new Map(alerts.map((alert) => [alert.ticket, alert])), [alerts]);
   return (
     <section className="positions-card">
       <div className="positions-heading">
         <div>
           <span className="panel-title">Position</span>
           <h2>Open position monitor</h2>
+          <small>Auto TP closes any position once floating profit reaches $10.</small>
         </div>
         <div className={`position-pnl ${totalProfit >= 0 ? "positive" : "negative"}`}>
           <span>Floating P/L</span>
@@ -1177,7 +2351,7 @@ function PositionCard({
       {positions.length > 0 ? (
         <div className="position-list">
           {positions.map((position) => (
-            <article key={position.ticket} className="position-row">
+            <article key={position.ticket} className={`position-row ${alertByTicket.get(position.ticket)?.status ?? ""}`}>
               <div className="position-main">
                 <strong>{position.symbol}</strong>
                 <span className={position.side === "BUY" ? "side-buy" : "side-sell"}>{position.side}</span>
@@ -1191,14 +2365,17 @@ function PositionCard({
                 <Metric label="TP" value={formatPrice(position.takeProfit)} />
                 <Metric label="P/L" value={formatMoney(position.profit)} tone={position.profit >= 0 ? "profit-positive" : "profit-negative"} />
               </div>
-              <button className="close-position-button" onClick={() => onCloseTicket(position.ticket)}>
-                <XCircle size={15} />
-                Close ticket
-              </button>
-              <button className="trail-position-button" onClick={() => onApplyTrailing(position.ticket)}>
-                <TrendingUp size={15} />
-                Apply trailing
-              </button>
+              {alertByTicket.get(position.ticket) ? <PositionSetupAlertBox alert={alertByTicket.get(position.ticket)!} /> : null}
+              <div className="position-row-actions">
+                <button className="close-position-button" onClick={() => onCloseTicket(position.ticket)}>
+                  <XCircle size={15} />
+                  Close ticket
+                </button>
+                <button className="trail-position-button" onClick={() => onApplyTrailing(position.ticket)}>
+                  <TrendingUp size={15} />
+                  Apply trailing
+                </button>
+              </div>
             </article>
           ))}
         </div>
@@ -1255,6 +2432,22 @@ function PositionCard({
         )}
       </div>
     </section>
+  );
+}
+
+function PositionSetupAlertBox({ alert }: { alert: PositionSetupAlert }) {
+  return (
+    <div className={`position-setup-alert ${alert.status}`}>
+      <div>
+        <strong>{alert.title}</strong>
+        <span>{alert.message}</span>
+      </div>
+      <small>
+        Checked {alert.checkedTimeframes.join(", ")}
+        {alert.supportingTimeframes.length > 0 ? ` | Support ${alert.supportingTimeframes.join(", ")}` : ""}
+        {alert.opposingTimeframes.length > 0 ? ` | Oppose ${alert.opposingTimeframes.join(", ")}` : ""}
+      </small>
+    </div>
   );
 }
 
@@ -1380,14 +2573,14 @@ function SignalLogTable({ items }: { items: SignalLogEntry[] }) {
   );
 }
 
-function EconomicCalendarBox({ calendar, activeSymbol }: { calendar: EconomicCalendarResponse | null; activeSymbol: SymbolName }) {
+function EconomicCalendarBox({ calendar, activeSymbol, compact = false }: { calendar: EconomicCalendarResponse | null; activeSymbol: SymbolName; compact?: boolean }) {
   const relevantEvents = React.useMemo(() => {
     const events = calendar?.events ?? [];
     return events.filter((event) => event.affected_symbols.includes(activeSymbol)).slice(0, 8);
   }, [activeSymbol, calendar]);
 
   return (
-    <section className="economic-calendar">
+    <section className={`economic-calendar ${compact ? "compact" : ""}`}>
       <div className="calendar-heading">
         <div>
           <span className="panel-title">Economic events</span>
@@ -1501,6 +2694,94 @@ function formatPrice(value: number | null | undefined) {
 
 function formatMoney(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(value);
+}
+
+function positiveNumber(value: string | number, fallback: number) {
+  const parsed = typeof value === "number" ? value : Number.parseFloat(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function clampNumber(value: string | number, min: number, max: number, fallback: number) {
+  const parsed = typeof value === "number" ? value : Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, min), max);
+}
+
+function riskModeSuffix(mode: RiskMode) {
+  if (mode === "fixed_lot") return "lot";
+  if (mode === "fixed_usd") return "USD";
+  return "% equity";
+}
+
+function formatActiveSymbols(value: SymbolName[] | null | undefined) {
+  if (!value || value.length === 0) return "None";
+  return value.join(", ");
+}
+
+function normalizeInvestingStatuses(response: InvestingStatusCollection | InvestingStatusResponse) {
+  if ("items" in response && response.items) {
+    return Object.fromEntries(
+      Object.entries(response.items).map(([symbol, value]) => [symbol, value?.investing_data_sync]).filter(([, value]) => Boolean(value))
+    ) as Partial<Record<SymbolName, InvestingDataSync>>;
+  }
+  if ("investing_data_sync" in response) {
+    return { [response.investing_data_sync.symbol]: response.investing_data_sync } as Partial<Record<SymbolName, InvestingDataSync>>;
+  }
+  return {};
+}
+
+function formatInvestingCode(value: string | null | undefined) {
+  if (!value) return "--";
+  return value.replace(/_/g, " ").replace(/\b\w/g, (letter: string) => letter.toUpperCase());
+}
+
+function investingToneClass(value: string | null | undefined) {
+  if (!value) return "";
+  if (value.includes("buy")) return "profit-text";
+  if (value.includes("sell")) return "loss-text";
+  return "";
+}
+
+function formatInvestingPrice(value: number | null | undefined) {
+  if (value === null || value === undefined) return "--";
+  if (Math.abs(value) >= 1000) return value.toFixed(2);
+  return value.toFixed(5);
+}
+
+function pivotType(level: string) {
+  if (level.startsWith("S")) return "Support";
+  if (level.startsWith("R")) return "Resistance";
+  return "Pivot";
+}
+
+function pivotDistance(level: string) {
+  if (level === "PIVOT") return "Midpoint";
+  const match = level.match(/\d+/);
+  return match ? `Level ${match[0]}` : "--";
+}
+
+function formatPivotSource(value: string | null | undefined) {
+  if (!value) return "--";
+  if (value === "OK" || value === "pivot_fibonacci") return "Pivot page";
+  if (value === "TECHNICAL_FALLBACK" || value.startsWith("technical_fibonacci")) return "Technical Fibonacci";
+  if (value === "FAILED") return "Parser failed";
+  if (value === "EMPTY") return "No pivot";
+  return value.replace(/_/g, " ");
+}
+
+function localDateKey(date: Date) {
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Makassar",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
+}
+
+function formatPercent(value: number | null | undefined) {
+  if (value === null || value === undefined) return "--";
+  return `${value.toFixed(value % 1 === 0 ? 0 : 2)}%`;
 }
 
 function formatDateLabel(value: string) {

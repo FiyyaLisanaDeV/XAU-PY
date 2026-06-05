@@ -6,7 +6,7 @@ import random
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .models import AccountStatus, Candle, ExecuteOrderRequest, OpenPosition, OrderType, Side, Symbol, Timeframe, TradingJournalEntry
+from .models import AccountStatus, Candle, ExecuteOrderRequest, OpenPosition, OrderType, PendingOrder, Side, Symbol, Timeframe, TradingJournalEntry
 
 try:
     import MetaTrader5 as mt5  # type: ignore
@@ -24,15 +24,14 @@ TIMEFRAME_MINUTES: dict[Timeframe, int] = {
 
 BASE_PRICE: dict[Symbol, float] = {
     "XAUUSD": 2348.0,
-    "GBPUSD": 1.273,
     "EURUSD": 1.084,
 }
 
 POINT_SIZE: dict[Symbol, float] = {
     "XAUUSD": 0.01,
-    "GBPUSD": 0.00001,
     "EURUSD": 0.00001,
 }
+MAX_LOT_PER_POSITION = 0.10
 
 
 class MT5Bridge:
@@ -267,6 +266,38 @@ class MT5Bridge:
             )
         return mapped
 
+    def pending_orders(self) -> list[PendingOrder]:
+        if mt5 is None or not self.initialize():
+            return []
+        orders = mt5.orders_get()
+        if not orders:
+            return []
+        mapped: list[PendingOrder] = []
+        for order in orders:
+            symbol = self._base_symbol(str(getattr(order, "symbol", "")))
+            if symbol is None:
+                continue
+            order_type = self._base_order_type(int(getattr(order, "type", -1)))
+            if order_type is None:
+                continue
+            side = Side.BUY if order_type in {OrderType.BUY_LIMIT, OrderType.BUY_STOP} else Side.SELL
+            mapped.append(
+                PendingOrder(
+                    ticket=int(getattr(order, "ticket", 0)),
+                    symbol=symbol,
+                    broker_symbol=str(getattr(order, "symbol", "")),
+                    side=side,
+                    orderType=order_type,
+                    volume=float(getattr(order, "volume_current", 0.0) or getattr(order, "volume_initial", 0.0)),
+                    entry=float(getattr(order, "price_open", 0.0)),
+                    stopLoss=float(getattr(order, "sl", 0.0)) or None,
+                    takeProfit=float(getattr(order, "tp", 0.0)) or None,
+                    created_at=datetime.fromtimestamp(int(getattr(order, "time_setup", 0)), tz=timezone.utc).isoformat(),
+                    comment=str(getattr(order, "comment", "")) or None,
+                )
+            )
+        return mapped
+
     def close_position(self, ticket: int | None = None, symbol: Symbol | None = None) -> tuple[bool, int | None, str, OpenPosition | None]:
         if mt5 is None or not self.initialize():
             return False, ticket, "MT5 is not connected; position was not closed.", None
@@ -381,11 +412,12 @@ class MT5Bridge:
         digits = int(getattr(info, "digits", 5))
         return point * 10 if digits in {3, 5} else point
 
-    def recent_closed_deals(self, hours: int = 48) -> list[TradingJournalEntry]:
+    def recent_closed_deals(self, hours: int | None = None, date_from: datetime | None = None) -> list[TradingJournalEntry]:
         if mt5 is None or not self.initialize():
             return []
         date_to = datetime.now(timezone.utc)
-        date_from = date_to - timedelta(hours=hours)
+        if date_from is None:
+            date_from = date_to - timedelta(hours=hours if hours is not None else 24 * 365)
         deals = mt5.history_deals_get(date_from, date_to)
         if not deals:
             return []
@@ -426,7 +458,7 @@ class MT5Bridge:
 
     @staticmethod
     def _base_symbol(broker_symbol: str) -> Symbol | None:
-        for symbol in ("XAUUSD", "GBPUSD", "EURUSD"):
+        for symbol in ("XAUUSD", "EURUSD"):
             if symbol in broker_symbol.upper():
                 return symbol  # type: ignore[return-value]
         return None
@@ -513,11 +545,24 @@ class MT5Bridge:
         }.get(order_type)
 
     @staticmethod
+    def _base_order_type(mt5_order_type: int) -> OrderType | None:
+        if mt5 is None:
+            return None
+        mapping = {
+            getattr(mt5, "ORDER_TYPE_BUY_LIMIT", None): OrderType.BUY_LIMIT,
+            getattr(mt5, "ORDER_TYPE_SELL_LIMIT", None): OrderType.SELL_LIMIT,
+            getattr(mt5, "ORDER_TYPE_BUY_STOP", None): OrderType.BUY_STOP,
+            getattr(mt5, "ORDER_TYPE_SELL_STOP", None): OrderType.SELL_STOP,
+        }
+        return mapping.get(mt5_order_type)
+
+    @staticmethod
     def _normalize_volume(volume: float, info: Any) -> float:
         min_volume = float(getattr(info, "volume_min", 0.01) or 0.01)
         max_volume = float(getattr(info, "volume_max", volume) or volume)
         step = float(getattr(info, "volume_step", 0.01) or 0.01)
-        normalized = max(min_volume, min(volume, max_volume))
+        capped_max_volume = min(max_volume, MAX_LOT_PER_POSITION)
+        normalized = max(min_volume, min(volume, capped_max_volume))
         steps = math.floor((normalized + 1e-12) / step)
         return round(max(min_volume, steps * step), 2)
 

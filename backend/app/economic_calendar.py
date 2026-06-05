@@ -10,8 +10,7 @@ from .models import EconomicCalendarResponse, EconomicEvent, Symbol
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_EXPORT_PATH = PROJECT_ROOT / "data" / "economic_calendar.json"
 CURRENCY_SYMBOLS: dict[str, list[Symbol]] = {
-    "USD": ["XAUUSD", "GBPUSD", "EURUSD"],
-    "GBP": ["GBPUSD"],
+    "USD": ["XAUUSD", "EURUSD"],
     "EUR": ["EURUSD"],
 }
 

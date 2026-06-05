@@ -3,6 +3,8 @@ uvicorn[standard]==0.38.0
 pydantic==2.12.5
 pytest==9.0.2
 httpx==0.28.1
+requests==2.32.5
+beautifulsoup4==4.14.3
 
 # Install manually on a compatible Python version when Exness MT5 is installed:
 # MetaTrader5

@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-Symbol = Literal["XAUUSD", "GBPUSD", "EURUSD"]
+Symbol = Literal["XAUUSD", "EURUSD"]
 Timeframe = Literal["M15", "M30", "H1", "H4", "D1"]
 
 
@@ -103,6 +103,27 @@ class DemoGuardStatus(BaseModel):
     message: str
 
 
+class BackendHealth(BaseModel):
+    active: bool
+    service: str
+    startedAt: str
+    serverTime: str
+    pid: int
+    message: str
+
+
+class BackendRestartResponse(BaseModel):
+    accepted: bool
+    status: Literal["scheduled", "blocked"]
+    message: str
+
+
+class DataResetResponse(BaseModel):
+    accepted: bool
+    message: str
+    cleared: list[str]
+
+
 class OrderRecommendation(BaseModel):
     symbol: Symbol
     timeframe: Timeframe
@@ -169,6 +190,56 @@ class OpenPosition(BaseModel):
     commission: float
     opened_at: str
     comment: str | None = None
+
+
+class PositionSetupAlert(BaseModel):
+    ticket: int
+    symbol: Symbol
+    side: Side
+    status: Literal["valid", "warning", "invalid"]
+    title: str
+    message: str
+    checkedTimeframes: list[Timeframe]
+    supportingTimeframes: list[Timeframe]
+    opposingTimeframes: list[Timeframe]
+    reasons: list[str]
+
+
+class PendingOrder(BaseModel):
+    ticket: int
+    symbol: Symbol
+    broker_symbol: str
+    side: Side
+    orderType: OrderType
+    volume: float
+    entry: float
+    stopLoss: float | None = None
+    takeProfit: float | None = None
+    created_at: str
+    comment: str | None = None
+
+
+class RiskExposureItem(BaseModel):
+    ticket: int | None = None
+    symbol: Symbol
+    source: Literal["position", "pending_order", "candidate"]
+    entry: float
+    stopLoss: float | None = None
+    lot: float
+    riskUsd: float | None = None
+    riskPercent: float | None = None
+    blockedReason: str | None = None
+
+
+class RiskExposure(BaseModel):
+    equity: float
+    maxTotalRiskPercent: float
+    totalRiskUsd: float
+    totalRiskPercent: float
+    availableRiskPercent: float
+    blocked: bool
+    blockedReasons: list[str]
+    items: list[RiskExposureItem]
 
 
 class ClosePositionRequest(BaseModel):
@@ -278,3 +349,49 @@ class SignalLogEntry(BaseModel):
     reasons: list[str]
     blockedReasons: list[str]
     status: Literal["potential", "blocked"]
+
+
+class AutoModeRequest(BaseModel):
+    enabled: bool
+    activeSymbols: list[Symbol] = Field(default_factory=lambda: ["XAUUSD", "EURUSD"])
+    maxTotalRiskPercent: float = Field(default=20.0, gt=0, le=100)
+    minScore: int = Field(default=60, ge=0, le=100)
+    riskMode: RiskMode = RiskMode.PERCENT_EQUITY
+    riskValue: float = Field(default=0.5, gt=0)
+    scanIntervalSeconds: int = Field(default=15, ge=5, le=300)
+    duplicateCooldownMinutes: int = Field(default=10, ge=0, le=1440)
+
+
+class AutoExecutionItem(BaseModel):
+    symbol: Symbol
+    timeframe: Timeframe
+    score: int
+    orderType: OrderType | None
+    accepted: bool
+    ticket: int | None = None
+    message: str
+    riskPercent: float | None = None
+
+
+class AutoModeStatus(BaseModel):
+    enabled: bool = False
+    activeSymbols: list[Symbol] = Field(default_factory=lambda: ["XAUUSD", "EURUSD"])
+    maxTotalRiskPercent: float = 20.0
+    minScore: int = 60
+    riskMode: RiskMode = RiskMode.PERCENT_EQUITY
+    riskValue: float = 0.5
+    scanIntervalSeconds: int = 15
+    duplicateCooldownMinutes: int = 10
+    lastScan: str | None = None
+    lastAction: str | None = None
+    blockedReason: str | None = None
+    exposure: RiskExposure
+
+
+class AutoScanResponse(BaseModel):
+    status: AutoModeStatus
+    scanned: int
+    eligible: int
+    executed: int
+    blocked: list[str]
+    actions: list[AutoExecutionItem]

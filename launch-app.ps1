@@ -1,8 +1,8 @@
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$BackendPort = 8000
-$FrontendPort = 5173
+$BackendPort = 9000
+$FrontendPort = 5174
 $FrontendUrl = "http://127.0.0.1:$FrontendPort/"
 $LogsDir = Join-Path $Root "logs"
 
@@ -30,6 +30,8 @@ function Wait-Http($Url, $Name) {
 
 Set-Location $Root
 New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
+Remove-Item Env:PATH -ErrorAction SilentlyContinue
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
 Write-Step "XAUGBPEUUSD launcher"
 Write-Step "Workspace: $Root"
@@ -39,11 +41,17 @@ if (-not (Test-Path (Join-Path $Root "node_modules"))) {
     npm install
 }
 
+if (Test-Path (Join-Path $Root ".venv\Scripts\python.exe")) {
+    $PythonExe = Join-Path $Root ".venv\Scripts\python.exe"
+} else {
+    $PythonExe = "python"
+}
+
 if (-not (Test-Port $BackendPort)) {
     Write-Step "Starting FastAPI backend on port $BackendPort..."
     $backendLog = Join-Path $LogsDir "backend.log"
     $backendErr = Join-Path $LogsDir "backend.err.log"
-    Start-Process -FilePath "python" `
+    Start-Process -FilePath $PythonExe `
         -ArgumentList "-m", "uvicorn", "backend.app.main:app", "--host", "127.0.0.1", "--port", "$BackendPort" `
         -WorkingDirectory $Root `
         -RedirectStandardOutput $backendLog `
@@ -54,11 +62,11 @@ if (-not (Test-Port $BackendPort)) {
 }
 
 if (-not (Test-Port $FrontendPort)) {
-    Write-Step "Starting Vite frontend on port $FrontendPort..."
+    Write-Step "Starting frontend static proxy on port $FrontendPort..."
     $frontendLog = Join-Path $LogsDir "frontend.log"
     $frontendErr = Join-Path $LogsDir "frontend.err.log"
     Start-Process -FilePath "cmd.exe" `
-        -ArgumentList "/c", "npm run dev -- --host 127.0.0.1 --port $FrontendPort" `
+        -ArgumentList "/c", "node scripts\serve-dist-proxy.cjs" `
         -WorkingDirectory $Root `
         -RedirectStandardOutput $frontendLog `
         -RedirectStandardError $frontendErr `

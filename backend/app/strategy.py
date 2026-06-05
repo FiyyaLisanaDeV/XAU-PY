@@ -15,7 +15,7 @@ from .models import (
     Zone,
 )
 
-MAX_SPREAD: dict[Symbol, float] = {"XAUUSD": 350.0, "GBPUSD": 18.0, "EURUSD": 18.0}
+MAX_SPREAD: dict[Symbol, float] = {"XAUUSD": 350.0, "EURUSD": 18.0}
 
 
 def sma(values: list[float], period: int) -> list[float]:
