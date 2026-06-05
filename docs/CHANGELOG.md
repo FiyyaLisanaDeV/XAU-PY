@@ -11,7 +11,7 @@
 - Removed `GBPUSD` from active strategy pair coverage.
 - Added total risk cap support with default `20%`.
 - Added max lot cap of `0.10` per position.
-- Added auto take profit monitor that closes positions with floating profit `>= $10`.
+- Added auto trailing monitor that starts moving SL after floating profit `>= $10`.
 - Added account summary dashboard:
   - P/L Total.
   - P/L Daily.
@@ -69,7 +69,7 @@
 
 - Fixed backend port mismatch that caused EA requests to hit `8000` while backend was live on `9000`.
 - Fixed reset behavior by creating a local journal baseline instead of relying only on in-memory cache clearing.
-- Fixed auto TP monitor so it runs in the backend loop and does not depend on frontend refresh.
+- Fixed trailing monitor so it runs in the backend loop and does not depend on frontend refresh.
 - Fixed stale UI confusion by exposing backend health and MT5 trade readiness in the top summary.
 - Fixed Investing page readability by separating sync status, timeframe confirmation, technical bias, and pivot levels.
 
@@ -82,4 +82,3 @@
   - `.tmp/`
 - The app still depends on local MT5 state for real execution.
 - Investing.com can lock some short timeframes, especially `5m` and `15m`; locked data is shown as locked and not treated as a valid fresh signal.
-

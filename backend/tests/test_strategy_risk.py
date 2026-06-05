@@ -254,7 +254,7 @@ def test_investing_technical_parses_available_timeframe_tabs():
     assert technical["timeframe_signals"]["1d"]["signal"]["code"] == "sell"
 
 
-def test_auto_take_profit_closes_positions_at_ten_dollars(monkeypatch):
+def test_auto_trailing_updates_stop_after_ten_dollars(monkeypatch):
     profitable = OpenPosition(
         ticket=11,
         symbol="XAUUSD",
@@ -290,27 +290,180 @@ def test_auto_take_profit_closes_positions_at_ten_dollars(monkeypatch):
 
     class FakeBridge:
         def __init__(self):
-            self.closed: list[int] = []
+            self.modified: list[tuple[int, float, float | None]] = []
 
         def open_positions(self):
             return [profitable, quiet]
 
-        def close_position(self, ticket=None, symbol=None):
-            self.closed.append(ticket)
-            return True, ticket, "closed", profitable
+        def tick(self, symbol):
+            return 2360.0, 2360.3, 30.0
+
+        def modify_position_stop(self, ticket, stop_loss, take_profit=None):
+            self.modified.append((ticket, stop_loss, take_profit))
+            return True, "updated", profitable.stopLoss, round(stop_loss, 2)
 
     fake_bridge = FakeBridge()
     monkeypatch.setattr(main_module, "bridge", fake_bridge)
-    main_module.auto_tp_closed_tickets.clear()
+    main_module.trailing_states.clear()
+    main_module.trailing_last_attempts.clear()
     main_module.journal.clear()
     main_module.history.clear()
 
-    results = main_module.close_profitable_positions()
+    results = main_module.process_trailing_positions()
 
     assert [item.ticket for item in results] == [11]
-    assert fake_bridge.closed == [11]
-    assert main_module.journal[-1].closeReason == "tp"
-    assert "10.00" in main_module.journal[-1].note
+    assert fake_bridge.modified == [(11, 2358.5, 2370.0)]
+    assert main_module.trailing_states[11].trailing_active
+    assert main_module.trailing_states[11].peak_price == 2360.0
+    assert not main_module.journal
+
+
+def test_auto_trailing_sell_uses_ask_peak_and_original_sl_guard(monkeypatch):
+    profitable = OpenPosition(
+        ticket=21,
+        symbol="EURUSD",
+        broker_symbol="EURUSDm",
+        side=Side.SELL,
+        volume=0.1,
+        open_price=1.1000,
+        current_price=1.0970,
+        stopLoss=1.1020,
+        takeProfit=1.0940,
+        profit=30.0,
+        swap=0.0,
+        commission=0.0,
+        opened_at="2026-06-04T00:00:00+00:00",
+        comment=None,
+    )
+
+    class FakeBridge:
+        def __init__(self):
+            self.modified: list[tuple[int, float, float | None]] = []
+
+        def open_positions(self):
+            return [profitable]
+
+        def tick(self, symbol):
+            return 1.0969, 1.0970, 10.0
+
+        def modify_position_stop(self, ticket, stop_loss, take_profit=None):
+            self.modified.append((ticket, stop_loss, take_profit))
+            return True, "updated", profitable.stopLoss, round(stop_loss, 5)
+
+    fake_bridge = FakeBridge()
+    monkeypatch.setattr(main_module, "bridge", fake_bridge)
+    main_module.trailing_states.clear()
+    main_module.trailing_last_attempts.clear()
+
+    results = main_module.process_trailing_positions()
+
+    assert [item.ticket for item in results] == [21]
+    assert fake_bridge.modified == [(21, 1.099, 1.0940)]
+    assert main_module.trailing_states[21].trailing_active
+    assert main_module.trailing_states[21].peak_price == 1.0970
+    assert main_module.trailing_states[21].current_sl == 1.099
+    status = main_module.build_auto_trailing_status()
+    assert status.enabled
+    assert status.monitorIntervalSeconds == 1
+    assert status.trackedTickets == 1
+    assert status.activeTickets == 1
+    assert [rule.symbol for rule in status.rules] == ["XAUUSD", "EURUSD"]
+    assert status.states[0].ticket == 21
+    assert status.states[0].currentStopLoss == 1.099
+
+
+def test_auto_trailing_skips_positions_without_stop_loss(monkeypatch):
+    no_stop_loss = OpenPosition(
+        ticket=31,
+        symbol="XAUUSD",
+        broker_symbol="XAUUSDm",
+        side=Side.BUY,
+        volume=0.01,
+        open_price=2350.0,
+        current_price=2360.0,
+        stopLoss=None,
+        takeProfit=2370.0,
+        profit=20.0,
+        swap=0.0,
+        commission=0.0,
+        opened_at="2026-06-04T00:00:00+00:00",
+        comment=None,
+    )
+
+    class FakeBridge:
+        def open_positions(self):
+            return [no_stop_loss]
+
+        def tick(self, symbol):
+            raise AssertionError("tick should not be called for positions without SL")
+
+        def modify_position_stop(self, ticket, stop_loss, take_profit=None):
+            raise AssertionError("modify should not be called for positions without SL")
+
+    monkeypatch.setattr(main_module, "bridge", FakeBridge())
+    main_module.trailing_states.clear()
+    main_module.trailing_last_attempts.clear()
+
+    assert main_module.process_trailing_positions() == []
+    assert 31 not in main_module.trailing_states
+
+
+def test_auto_trailing_rolls_back_state_when_modify_fails(monkeypatch):
+    profitable = OpenPosition(
+        ticket=41,
+        symbol="XAUUSD",
+        broker_symbol="XAUUSDm",
+        side=Side.BUY,
+        volume=0.01,
+        open_price=2350.0,
+        current_price=2360.0,
+        stopLoss=2340.0,
+        takeProfit=2370.0,
+        profit=20.0,
+        swap=0.0,
+        commission=0.0,
+        opened_at="2026-06-04T00:00:00+00:00",
+        comment=None,
+    )
+
+    class FakeBridge:
+        def open_positions(self):
+            return [profitable]
+
+        def tick(self, symbol):
+            return 2360.0, 2360.3, 30.0
+
+        def modify_position_stop(self, ticket, stop_loss, take_profit=None):
+            return False, "rejected", profitable.stopLoss, round(stop_loss, 2)
+
+    monkeypatch.setattr(main_module, "bridge", FakeBridge())
+    main_module.trailing_states.clear()
+    main_module.trailing_last_attempts.clear()
+
+    results = main_module.process_trailing_positions()
+
+    assert [item.accepted for item in results] == [False]
+    assert main_module.trailing_states[41].trailing_active
+    assert main_module.trailing_states[41].current_sl == profitable.stopLoss
+    assert 41 in main_module.trailing_last_attempts
+
+
+def test_restart_all_services_schedules_backend_and_running_frontend(monkeypatch):
+    calls: list[str] = []
+
+    monkeypatch.setattr(main_module, "is_port_listening", lambda port: port == 5174)
+    monkeypatch.setattr(main_module, "schedule_frontend_start", lambda: calls.append("frontend"))
+    monkeypatch.setattr(main_module, "schedule_backend_restart", lambda: calls.append("backend"))
+
+    response = main_module.restart_all_services()
+
+    assert response.accepted
+    assert response.status == "scheduled"
+    assert calls == ["backend"]
+    assert [(item.service, item.status, item.port) for item in response.actions] == [
+        ("frontend", "running", 5174),
+        ("backend", "scheduled", 9000),
+    ]
 
 
 def test_position_setup_alert_marks_opposite_valid_signal_as_invalid():

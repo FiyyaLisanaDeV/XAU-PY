@@ -156,18 +156,30 @@ Full Auto executes only when all of these are true:
 12. Total exposure after the candidate stays within `20%`.
 13. Duplicate cooldown has not blocked the setup.
 
-## Auto TP
+## Auto Trailing
 
-Auto TP is separate from the strategy signal.
+Auto trailing is separate from the strategy signal.
 
 Behavior:
 
 ```text
 if open position floating profit >= $10:
-    backend sends close request to MT5
+    backend activates trailing state for that ticket
+    backend moves SL behind peak price when step distance is reached
 ```
 
-The monitor runs every second while the backend is alive. It does not depend on frontend refresh.
+The monitor runs every second while the backend is alive. It does not depend on frontend refresh and it does not require Full Auto to be enabled.
+
+Default trailing config:
+
+| Pair | Trigger | Distance | Step | Pip size |
+| --- | ---: | ---: | ---: | ---: |
+| `XAUUSD` | `$10` | `150 pips` | `50 pips` | `0.01` |
+| `EURUSD` | `$10` | `20 pips` | `8 pips` | `0.0001` |
+
+The backend does not use native MT5 trailing. It polls positions, stores state per ticket, tracks peak price, and sends `SLTP` modify requests to MT5.
+
+The UI reads `GET /api/auto-trailing/status` to show how many tickets are tracked, how many have active trailing, and which rules are currently used for each pair.
 
 ## Practical Reading Guide
 
@@ -182,4 +194,3 @@ When a trade is not opening, read blockers in this order:
 7. Does the trade have valid SL/TP?
 8. Is total risk still under `20%`?
 9. Is duplicate cooldown blocking?
-

@@ -21,8 +21,10 @@ This page lists the main user-facing and backend features in the XAU-PY trading 
 | Close all winning trades | Closes currently open positions with floating profit above zero |
 | Close all losing trades | Closes currently open positions with floating profit below zero |
 | Close all open trades | Closes every open position after confirmation |
-| Auto TP | Backend closes positions with floating profit `>= $10` |
+| Auto trailing | Backend starts trailing SL when floating profit reaches `>= $10` |
+| Auto trailing status | Shows tracked tickets, active trailing tickets, and XAUUSD/EURUSD trailing rules |
 | Reset all data | Resets local dashboard baseline without deleting broker history or closing positions |
+| Restart all services | Restarts backend and starts frontend on `5174` if it is not running |
 
 ## Full Auto
 
@@ -93,9 +95,13 @@ The Investing page shows one section per pair.
 
 | Monitor | Interval | Behavior |
 | --- | --- | --- |
-| Auto TP monitor | `1 second` | closes positions with floating profit `>= $10` |
+| Auto trailing monitor | `1 second` | moves SL after floating profit reaches `>= $10` |
 | Full Auto strategy monitor | configurable, default `15 seconds` | scans and executes if valid |
 | Investing sync monitor | `60 seconds` | refreshes Investing technical data for all active source symbols |
+
+## Service Recovery
+
+The frontend has a `Restart all services` button for laptop startup recovery. It calls `POST /api/services/restart-all`, starts the frontend on port `5174` when needed, and schedules a backend restart on port `9000`.
 
 ## Safety Features
 
@@ -108,4 +114,3 @@ The Investing page shows one section per pair.
 - Duplicate auto-entry cooldown.
 - Pending orders and open positions included in exposure.
 - Missing stop loss blocks Full Auto exposure.
-

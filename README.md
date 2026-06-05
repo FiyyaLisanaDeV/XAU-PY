@@ -26,8 +26,9 @@ Local FastAPI + React dashboard for `XAUUSD` and `EURUSD` trading workflow with 
 | Minimum confluence score | `60` |
 | Total risk cap | `20%` equity |
 | Max lot per position | `0.10` |
-| Auto TP | close floating profit `>= $10` |
+| Auto trailing | starts when floating profit `>= $10` |
 | Investing auto sync | every `60 seconds` |
+| Restart all services | frontend button starts `5174` if needed and restarts backend `9000` |
 
 ## How The System Decides
 
@@ -159,4 +160,3 @@ data/potential_signals.jsonl
 ```
 
 These are live state/cache files and should not be treated as source code.
-

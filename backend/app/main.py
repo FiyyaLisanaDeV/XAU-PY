@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import socket
 import subprocess
 import sys
 from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -17,6 +19,10 @@ from .models import (
     AutoModeRequest,
     AutoModeStatus,
     AutoScanResponse,
+    AutoTrailingRule,
+    AutoTrailingStateItem,
+    AutoTrailingStatus,
+    AllServicesRestartResponse,
     BackendHealth,
     BackendRestartResponse,
     ClosePositionRequest,
@@ -40,6 +46,8 @@ from .models import (
     RiskExposureItem,
     RiskMode,
     RiskRequest,
+    ServiceRestartAction,
+    Side,
     SignalLogEntry,
     Symbol,
     Timeframe,
@@ -65,17 +73,17 @@ from .strategy import build_snapshot, recommend
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    global auto_tp_monitor_task, auto_strategy_monitor_task, investing_sync_monitor_task
-    auto_tp_monitor_task = asyncio.create_task(auto_take_profit_monitor())
+    global trailing_monitor_task, auto_strategy_monitor_task, investing_sync_monitor_task
+    trailing_monitor_task = asyncio.create_task(trailing_monitor_loop())
     auto_strategy_monitor_task = asyncio.create_task(auto_strategy_monitor())
     investing_sync_monitor_task = asyncio.create_task(investing_sync_monitor())
     try:
         yield
     finally:
-        if auto_tp_monitor_task is not None:
-            auto_tp_monitor_task.cancel()
+        if trailing_monitor_task is not None:
+            trailing_monitor_task.cancel()
             with suppress(asyncio.CancelledError):
-                await auto_tp_monitor_task
+                await trailing_monitor_task
         if auto_strategy_monitor_task is not None:
             auto_strategy_monitor_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -115,13 +123,29 @@ auto_last_action: str | None = None
 auto_blocked_reason: str | None = None
 auto_executed_signatures: dict[str, datetime] = {}
 AUTO_TAKE_PROFIT_USD = float(os.getenv("XAUGBPEUUSD_AUTO_TP_USD", "10"))
-AUTO_TAKE_PROFIT_INTERVAL_SECONDS = float(os.getenv("XAUGBPEUUSD_AUTO_TP_INTERVAL_SECONDS", "1"))
+TRAILING_MONITOR_INTERVAL_SECONDS = float(os.getenv("XAUGBPEUUSD_TRAILING_INTERVAL_SECONDS", "1"))
 INVESTING_SYNC_INTERVAL_SECONDS = float(os.getenv("XAUGBPEUUSD_INVESTING_SYNC_INTERVAL_SECONDS", "60"))
-auto_tp_closed_tickets: set[int] = set()
-auto_tp_last_attempts: dict[int, datetime] = {}
-auto_tp_monitor_task: asyncio.Task[None] | None = None
+TRAILING_CONFIG: dict[Symbol, dict[str, float]] = {
+    "XAUUSD": {"trigger_usd": AUTO_TAKE_PROFIT_USD, "distance_pips": 150.0, "step_pips": 50.0, "pip_size": 0.01},
+    "EURUSD": {"trigger_usd": AUTO_TAKE_PROFIT_USD, "distance_pips": 20.0, "step_pips": 8.0, "pip_size": 0.0001},
+}
+trailing_states: dict[int, "TrailingState"] = {}
+trailing_last_attempts: dict[int, datetime] = {}
+trailing_monitor_task: asyncio.Task[None] | None = None
 auto_strategy_monitor_task: asyncio.Task[None] | None = None
 investing_sync_monitor_task: asyncio.Task[None] | None = None
+
+
+@dataclass
+class TrailingState:
+    ticket: int
+    symbol: Symbol
+    side: Side
+    open_price: float
+    original_sl: float
+    current_sl: float
+    trailing_active: bool = False
+    peak_price: float = 0.0
 
 
 def active_scan_symbols() -> tuple[Symbol, ...]:
@@ -222,6 +246,77 @@ def restart_backend():
     return BackendRestartResponse(accepted=True, status="scheduled", message="Backend restart scheduled. UI may show offline for a few seconds.")
 
 
+@app.post("/api/services/restart-all", response_model=AllServicesRestartResponse)
+def restart_all_services():
+    actions: list[ServiceRestartAction] = []
+    try:
+        if is_port_listening(5174):
+            actions.append(
+                ServiceRestartAction(
+                    service="frontend",
+                    accepted=True,
+                    status="running",
+                    port=5174,
+                    message="Frontend is already running on port 5174.",
+                )
+            )
+        else:
+            schedule_frontend_start()
+            actions.append(
+                ServiceRestartAction(
+                    service="frontend",
+                    accepted=True,
+                    status="scheduled",
+                    port=5174,
+                    message="Frontend start scheduled on port 5174.",
+                )
+            )
+    except Exception as exc:
+        actions.append(
+            ServiceRestartAction(
+                service="frontend",
+                accepted=False,
+                status="blocked",
+                port=5174,
+                message=f"Frontend could not be started: {exc}",
+            )
+        )
+    try:
+        schedule_backend_restart()
+        actions.append(
+            ServiceRestartAction(
+                service="backend",
+                accepted=True,
+                status="scheduled",
+                port=9000,
+                message="Backend restart scheduled on port 9000.",
+            )
+        )
+    except Exception as exc:
+        actions.append(
+            ServiceRestartAction(
+                service="backend",
+                accepted=False,
+                status="blocked",
+                port=9000,
+                message=f"Backend restart could not be scheduled: {exc}",
+            )
+        )
+    accepted_count = sum(1 for item in actions if item.accepted)
+    if accepted_count == len(actions):
+        status = "scheduled"
+    elif accepted_count > 0:
+        status = "partial"
+    else:
+        status = "blocked"
+    return AllServicesRestartResponse(
+        accepted=accepted_count > 0,
+        status=status,
+        message="Service restart request processed. Backend may be offline for a few seconds.",
+        actions=actions,
+    )
+
+
 @app.post("/api/data/reset", response_model=DataResetResponse)
 def reset_data():
     global auto_last_scan, auto_last_action, auto_blocked_reason
@@ -233,8 +328,8 @@ def reset_data():
     journal.clear()
     cleared.append("journal_cache")
     auto_executed_signatures.clear()
-    auto_tp_closed_tickets.clear()
-    auto_tp_last_attempts.clear()
+    trailing_states.clear()
+    trailing_last_attempts.clear()
     auto_last_scan = None
     auto_last_action = None
     auto_blocked_reason = None
@@ -264,8 +359,14 @@ def set_demo_guard(request: DemoGuardRequest):
 
 @app.get("/api/auto-mode/status", response_model=AutoModeStatus)
 def auto_mode_status():
-    close_profitable_positions()
+    process_trailing_positions()
     return build_auto_status()
+
+
+@app.get("/api/auto-trailing/status", response_model=AutoTrailingStatus)
+def auto_trailing_status():
+    process_trailing_positions()
+    return build_auto_trailing_status()
 
 
 @app.post("/api/auto-mode", response_model=AutoModeStatus)
@@ -410,13 +511,13 @@ def execute_order(request: ExecuteOrderRequest):
 
 @app.get("/api/positions", response_model=list[OpenPosition])
 def positions():
-    close_profitable_positions()
+    process_trailing_positions()
     return bridge.open_positions()
 
 
 @app.get("/api/positions/alerts", response_model=list[PositionSetupAlert])
 def position_alerts():
-    close_profitable_positions()
+    process_trailing_positions()
     return build_position_alerts(bridge.open_positions())
 
 
@@ -613,41 +714,155 @@ def build_auto_status(exposure: RiskExposure | None = None) -> AutoModeStatus:
     )
 
 
-def close_profitable_positions() -> list[ClosePositionResult]:
+def cleanup_trailing_states(open_tickets: set[int]) -> None:
+    closed_tickets = [ticket for ticket in trailing_states if ticket not in open_tickets]
+    for ticket in closed_tickets:
+        trailing_states.pop(ticket, None)
+        trailing_last_attempts.pop(ticket, None)
+
+
+def get_or_create_trailing_state(position: OpenPosition) -> TrailingState:
+    if position.stopLoss is None:
+        raise ValueError("Trailing state requires an existing stop loss")
+    state = trailing_states.get(position.ticket)
+    if state is None:
+        state = TrailingState(
+            ticket=position.ticket,
+            symbol=position.symbol,
+            side=position.side,
+            open_price=position.open_price,
+            original_sl=position.stopLoss,
+            current_sl=position.stopLoss,
+        )
+        trailing_states[position.ticket] = state
+    return state
+
+
+def process_trailing_position(
+    position: OpenPosition,
+    state: TrailingState,
+    current_bid: float,
+    current_ask: float,
+    config: dict[str, float],
+) -> float | None:
+    if not state.trailing_active:
+        if position.profit >= config["trigger_usd"]:
+            state.trailing_active = True
+            state.peak_price = current_bid if position.side == Side.BUY else current_ask
+        else:
+            return None
+
+    current_price = current_bid if position.side == Side.BUY else current_ask
+    if position.side == Side.BUY:
+        if current_price > state.peak_price:
+            state.peak_price = current_price
+    elif current_price < state.peak_price:
+        state.peak_price = current_price
+
+    distance = config["distance_pips"] * config["pip_size"]
+    step = config["step_pips"] * config["pip_size"]
+
+    if position.side == Side.BUY:
+        ideal_sl = state.peak_price - distance
+        ideal_sl = max(ideal_sl, state.original_sl)
+        if ideal_sl <= state.current_sl:
+            return None
+    else:
+        ideal_sl = state.peak_price + distance
+        ideal_sl = min(ideal_sl, state.original_sl)
+        if ideal_sl >= state.current_sl:
+            return None
+
+    if abs(ideal_sl - state.current_sl) < step:
+        return None
+
+    state.current_sl = ideal_sl
+    return ideal_sl
+
+
+def process_trailing_positions() -> list[ClosePositionResult]:
     global auto_last_action
     results: list[ClosePositionResult] = []
     now = datetime.now(timezone.utc)
-    for position in bridge.open_positions():
-        if position.ticket in auto_tp_closed_tickets:
+    positions = bridge.open_positions()
+    cleanup_trailing_states({position.ticket for position in positions})
+    for position in positions:
+        if position.stopLoss is None:
             continue
-        if position.profit < AUTO_TAKE_PROFIT_USD:
+        config = TRAILING_CONFIG.get(position.symbol)
+        if config is None:
             continue
-        last_attempt = auto_tp_last_attempts.get(position.ticket)
+        state = get_or_create_trailing_state(position)
+        last_attempt = trailing_last_attempts.get(position.ticket)
         if last_attempt is not None and now - last_attempt < timedelta(seconds=3):
             continue
-        auto_tp_last_attempts[position.ticket] = now
-        accepted, ticket, message, closed_position = bridge.close_position(ticket=position.ticket)
+        bid, ask, _spread = bridge.tick(position.symbol)
+        new_sl = process_trailing_position(position, state, bid, ask, config)
+        if new_sl is None:
+            continue
+        trailing_last_attempts[position.ticket] = now
+        accepted, message, old_sl, modified_sl = bridge.modify_position_stop(
+            ticket=position.ticket,
+            stop_loss=new_sl,
+            take_profit=position.takeProfit,
+        )
         close_result = ClosePositionResult(
             accepted=accepted,
-            ticket=ticket,
+            ticket=position.ticket,
             symbol=position.symbol,
             message=message,
         )
         results.append(close_result)
-        if accepted and closed_position:
-            auto_tp_closed_tickets.add(closed_position.ticket)
-            record_auto_take_profit(ticket, closed_position)
-            auto_last_action = f"Auto TP closed {closed_position.symbol} ticket {ticket} at ${closed_position.profit:.2f} profit"
+        if accepted:
+            auto_last_action = f"Trailing SL updated {position.symbol} ticket {position.ticket} from {old_sl} to {modified_sl}"
+        else:
+            state.current_sl = position.stopLoss
     return results
 
 
-async def auto_take_profit_monitor() -> None:
+def build_auto_trailing_status() -> AutoTrailingStatus:
+    rules = [
+        AutoTrailingRule(
+            symbol=symbol,
+            triggerUsd=config["trigger_usd"],
+            distancePips=config["distance_pips"],
+            stepPips=config["step_pips"],
+            pipSize=config["pip_size"],
+        )
+        for symbol, config in TRAILING_CONFIG.items()
+    ]
+    states = [
+        AutoTrailingStateItem(
+            ticket=state.ticket,
+            symbol=state.symbol,
+            side=state.side,
+            openPrice=state.open_price,
+            originalStopLoss=state.original_sl,
+            currentStopLoss=state.current_sl,
+            trailingActive=state.trailing_active,
+            peakPrice=state.peak_price,
+            lastAttempt=trailing_last_attempts.get(state.ticket).isoformat() if state.ticket in trailing_last_attempts else None,
+        )
+        for state in sorted(trailing_states.values(), key=lambda item: item.ticket)
+    ]
+    active_tickets = sum(1 for state in states if state.trailingActive)
+    return AutoTrailingStatus(
+        monitorIntervalSeconds=TRAILING_MONITOR_INTERVAL_SECONDS,
+        trackedTickets=len(states),
+        activeTickets=active_tickets,
+        rules=rules,
+        states=states,
+        message=f"Auto trailing is always on; {active_tickets} active ticket(s), {len(states)} tracked.",
+    )
+
+
+async def trailing_monitor_loop() -> None:
     while True:
         try:
-            await asyncio.to_thread(close_profitable_positions)
+            await asyncio.to_thread(process_trailing_positions)
         except Exception:
             pass
-        await asyncio.sleep(AUTO_TAKE_PROFIT_INTERVAL_SECONDS)
+        await asyncio.sleep(TRAILING_MONITOR_INTERVAL_SECONDS)
 
 
 async def auto_strategy_monitor() -> None:
@@ -671,25 +886,6 @@ async def investing_sync_monitor() -> None:
         await asyncio.sleep(INVESTING_SYNC_INTERVAL_SECONDS)
 
 
-def record_auto_take_profit(ticket: int | None, position: OpenPosition) -> None:
-    add_journal(
-        TradingJournalEntry(
-            time=datetime.now(timezone.utc).isoformat(),
-            ticket=ticket,
-            symbol=position.symbol,
-            side=position.side,
-            volume=position.volume,
-            entry=position.open_price,
-            exit=position.current_price,
-            profit=position.profit,
-            closeReason="tp",
-            source="app",
-            note=f"Auto take profit closed at ${AUTO_TAKE_PROFIT_USD:.2f} profit threshold",
-        )
-    )
-    add_history(position.symbol, "H1", 0, "AUTO_TP_10_USD", "closed")
-
-
 def run_auto_scan() -> AutoScanResponse:
     global auto_last_scan, auto_last_action, auto_blocked_reason
     auto_last_scan = datetime.now(timezone.utc).isoformat()
@@ -706,7 +902,7 @@ def run_auto_scan() -> AutoScanResponse:
     if not auto_config.enabled:
         auto_blocked_reason = "Auto mode is OFF"
         return AutoScanResponse(status=build_auto_status(exposure), scanned=0, eligible=0, executed=0, blocked=[auto_blocked_reason], actions=[])
-    close_profitable_positions()
+    process_trailing_positions()
     if not account.connected:
         auto_blocked_reason = "MT5 is offline"
         return AutoScanResponse(status=build_auto_status(exposure), scanned=0, eligible=0, executed=0, blocked=[auto_blocked_reason], actions=[])
@@ -858,6 +1054,12 @@ def unique_recent(values: list[str]) -> list[str]:
     return list(dict.fromkeys(values))[-20:]
 
 
+def is_port_listening(port: int, host: str = "127.0.0.1") -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.25)
+        return sock.connect_ex((host, port)) == 0
+
+
 def schedule_backend_restart() -> None:
     pid = os.getpid()
     python_exe = sys.executable
@@ -875,6 +1077,28 @@ def schedule_backend_restart() -> None:
         f"-WorkingDirectory '{root}' "
         f"-RedirectStandardOutput '{backend_log}' "
         f"-RedirectStandardError '{backend_err}' "
+        "-WindowStyle Hidden"
+    )
+    subprocess.Popen(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", helper],
+        cwd=root,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+def schedule_frontend_start() -> None:
+    root = str(PROJECT_ROOT)
+    logs = PROJECT_ROOT / "logs"
+    logs.mkdir(exist_ok=True)
+    frontend_log = str(logs / "frontend-5174.log")
+    frontend_err = str(logs / "frontend-5174.err.log")
+    npm_exe = "npm.cmd" if os.name == "nt" else "npm"
+    helper = (
+        f"Start-Process -FilePath '{npm_exe}' "
+        "-ArgumentList 'run','dev','--','--host','127.0.0.1','--port','5174','--strictPort' "
+        f"-WorkingDirectory '{root}' "
+        f"-RedirectStandardOutput '{frontend_log}' "
+        f"-RedirectStandardError '{frontend_err}' "
         "-WindowStyle Hidden"
     )
     subprocess.Popen(

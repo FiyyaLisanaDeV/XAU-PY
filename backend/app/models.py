@@ -118,6 +118,21 @@ class BackendRestartResponse(BaseModel):
     message: str
 
 
+class ServiceRestartAction(BaseModel):
+    service: Literal["backend", "frontend"]
+    accepted: bool
+    status: Literal["scheduled", "running", "blocked"]
+    port: int
+    message: str
+
+
+class AllServicesRestartResponse(BaseModel):
+    accepted: bool
+    status: Literal["scheduled", "partial", "blocked"]
+    message: str
+    actions: list[ServiceRestartAction]
+
+
 class DataResetResponse(BaseModel):
     accepted: bool
     message: str
@@ -282,6 +297,36 @@ class TrailingStopResponse(BaseModel):
     oldStopLoss: float | None = None
     newStopLoss: float | None = None
     profitPips: float | None = None
+
+
+class AutoTrailingRule(BaseModel):
+    symbol: Symbol
+    triggerUsd: float
+    distancePips: float
+    stepPips: float
+    pipSize: float
+
+
+class AutoTrailingStateItem(BaseModel):
+    ticket: int
+    symbol: Symbol
+    side: Side
+    openPrice: float
+    originalStopLoss: float
+    currentStopLoss: float
+    trailingActive: bool
+    peakPrice: float
+    lastAttempt: str | None = None
+
+
+class AutoTrailingStatus(BaseModel):
+    enabled: bool = True
+    monitorIntervalSeconds: float
+    trackedTickets: int
+    activeTickets: int
+    rules: list[AutoTrailingRule]
+    states: list[AutoTrailingStateItem]
+    message: str
 
 
 class TradingJournalEntry(BaseModel):

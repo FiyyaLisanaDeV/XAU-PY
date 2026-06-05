@@ -96,6 +96,21 @@ interface BackendRestartResponse {
   message: string;
 }
 
+interface ServiceRestartAction {
+  service: "backend" | "frontend";
+  accepted: boolean;
+  status: "scheduled" | "running" | "blocked";
+  port: number;
+  message: string;
+}
+
+interface AllServicesRestartResponse {
+  accepted: boolean;
+  status: "scheduled" | "partial" | "blocked";
+  message: string;
+  actions: ServiceRestartAction[];
+}
+
 interface DataResetResponse {
   accepted: boolean;
   message: string;
@@ -202,6 +217,36 @@ interface AutoModeStatus {
   lastAction: string | null;
   blockedReason: string | null;
   exposure: RiskExposure;
+}
+
+interface AutoTrailingRule {
+  symbol: SymbolName;
+  triggerUsd: number;
+  distancePips: number;
+  stepPips: number;
+  pipSize: number;
+}
+
+interface AutoTrailingStateItem {
+  ticket: number;
+  symbol: SymbolName;
+  side: "BUY" | "SELL";
+  openPrice: number;
+  originalStopLoss: number;
+  currentStopLoss: number;
+  trailingActive: boolean;
+  peakPrice: number;
+  lastAttempt: string | null;
+}
+
+interface AutoTrailingStatus {
+  enabled: boolean;
+  monitorIntervalSeconds: number;
+  trackedTickets: number;
+  activeTickets: number;
+  rules: AutoTrailingRule[];
+  states: AutoTrailingStateItem[];
+  message: string;
 }
 
 interface AutoScanResponse {
@@ -411,6 +456,7 @@ function App() {
   const [positions, setPositions] = React.useState<OpenPosition[]>([]);
   const [journal, setJournal] = React.useState<TradingJournalEntry[]>([]);
   const [autoMode, setAutoMode] = React.useState<AutoModeStatus | null>(null);
+  const [autoTrailing, setAutoTrailing] = React.useState<AutoTrailingStatus | null>(null);
   const [ticks, setTicks] = React.useState<Partial<Record<SymbolName, MarketTick>>>({});
   const [confluenceScores, setConfluenceScores] = React.useState<ConfluenceScoreCard[]>([]);
   const [strategySettings, setStrategySettings] = React.useState<StrategyRiskSettings>(defaultStrategyRiskSettings);
@@ -444,11 +490,12 @@ function App() {
   }, [strategySettings.riskMode, strategySettings.riskValue]);
 
   const refresh = React.useCallback(async () => {
-    const [nextStatus, nextPositions, nextJournal, nextAutoMode, nextTicks, nextBackendHealth, nextInvestingStatus, nextInvestingTechnical] = await Promise.all([
+    const [nextStatus, nextPositions, nextJournal, nextAutoMode, nextAutoTrailing, nextTicks, nextBackendHealth, nextInvestingStatus, nextInvestingTechnical] = await Promise.all([
       fetchJson<Status>(`${API_BASE}/api/status`, { cache: "no-store" }),
       fetchJson<OpenPosition[]>(`${API_BASE}/api/positions`, { cache: "no-store" }),
       fetchJson<TradingJournalEntry[]>(`${API_BASE}/api/journal`, { cache: "no-store" }),
       fetchJson<AutoModeStatus>(`${API_BASE}/api/auto-mode/status`, { cache: "no-store" }),
+      fetchJson<AutoTrailingStatus>(`${API_BASE}/api/auto-trailing/status`, { cache: "no-store" }),
       fetchJson<Partial<Record<SymbolName, MarketTick>>>(`${API_BASE}/api/market/ticks`, { cache: "no-store" }),
       fetchJson<BackendHealth>(`${API_BASE}/api/backend/health`, { cache: "no-store" }),
       fetchJson<InvestingStatusCollection>(`${API_BASE}/api/investing/status`, { cache: "no-store" }),
@@ -458,6 +505,7 @@ function App() {
     setPositions(nextPositions);
     setJournal(nextJournal);
     setAutoMode(nextAutoMode);
+    setAutoTrailing(nextAutoTrailing);
     setTicks(nextTicks);
     setBackendHealth(nextBackendHealth);
     const nextSyncBySymbol = normalizeInvestingStatuses(nextInvestingStatus);
@@ -536,6 +584,19 @@ function App() {
     });
     setToast(response.message);
     refresh().catch(() => undefined);
+  }
+
+  async function restartAllServices() {
+    if (!window.confirm("Restart all services now? Backend may be offline for a few seconds; frontend will be started if port 5174 is down.")) return;
+    const response = await fetchJson<AllServicesRestartResponse>(`${API_BASE}/api/services/restart-all`, {
+      method: "POST",
+      cache: "no-store"
+    });
+    setToast(`${response.message} ${formatServiceActions(response.actions)}`);
+    setBackendHealth(null);
+    window.setTimeout(() => {
+      refresh().catch(() => undefined);
+    }, 4500);
   }
 
   async function toggleAutoMode(enabled: boolean) {
@@ -623,6 +684,7 @@ function App() {
         <div className="summary-status-row">
           <span className={backendHealth?.active ? "summary-pill ok" : "summary-pill danger"}>{backendHealth?.active ? "Backend active" : "Backend offline"}</span>
           <span className={status?.connected ? "summary-pill ok" : "summary-pill warn"}>{status?.connected ? "MT5 connected" : "MT5 offline"}</span>
+          <button className="summary-refresh service-restart" onClick={() => restartAllServices().catch((error) => setToast(error.message))}>Restart all services</button>
           <button className="summary-refresh" onClick={() => refresh().catch(() => undefined)}>Refresh</button>
         </div>
       </header>
@@ -669,6 +731,12 @@ function App() {
           <strong>{autoMode?.enabled ? "ON" : "OFF"}</strong>
           <small>Total risk cap {formatPercent(autoMode?.maxTotalRiskPercent ?? 20)}</small>
           <small>Active {formatActiveSymbols(autoMode?.activeSymbols)}</small>
+        </div>
+        <div className="quote-card">
+          <span>Auto Trailing</span>
+          <strong>{autoTrailing?.activeTickets ?? 0}/{autoTrailing?.trackedTickets ?? 0}</strong>
+          <small>Always ON - checks every {formatSeconds(autoTrailing?.monitorIntervalSeconds ?? 1)}</small>
+          <small>{formatTrailingRules(autoTrailing?.rules)}</small>
         </div>
       </section>
 
@@ -768,7 +836,7 @@ function App() {
             <span className="panel-title">Open positions</span>
             <h2>Current floating P/L</h2>
           </div>
-          <small>Auto TP closes floating profit at $10.</small>
+          <small>{autoTrailing?.message ?? "Auto trailing activates when floating profit reaches $10."}</small>
         </div>
         <table className="summary-table">
           <thead>
@@ -1141,7 +1209,7 @@ function StrategySettingsPage({
             <span>M15, M30, H1 = execution timeframe</span>
             <span>H4, D1 = monitor/context only</span>
             <span>Lot max per position tetap 0.10</span>
-            <span>Auto TP tetap close saat floating profit {">="} $10</span>
+            <span>Auto trailing aktif saat floating profit {">="} $10</span>
             <span>Pair aktif auto-entry: {formatActiveSymbols(settings.activeSymbols)}</span>
           </div>
         </section>
@@ -1471,6 +1539,20 @@ function LegacyApp() {
     }, 3500);
   }
 
+  async function restartAllServices() {
+    if (!window.confirm("Restart all services now? Backend may be offline for a few seconds; frontend will be started if port 5174 is down.")) return;
+    const response = await fetchJson<AllServicesRestartResponse>(`${API_BASE}/api/services/restart-all`, {
+      method: "POST",
+      cache: "no-store"
+    });
+    setToast(`${response.message} ${formatServiceActions(response.actions)}`);
+    setBackendHealth(null);
+    window.setTimeout(() => {
+      refreshBackendHealth().catch(() => undefined);
+      refresh().catch(() => undefined);
+    }, 4500);
+  }
+
   async function toggleAutoMode(enabled: boolean) {
     const safeRiskValue = sanitizeRiskValue(riskValue);
     const payload = await fetchJson<AutoModeStatus>(`${API_BASE}/api/auto-mode`, {
@@ -1533,6 +1615,7 @@ function LegacyApp() {
         onTimeframe={setTimeframe}
         onRefresh={refresh}
         onRestartBackend={restartBackend}
+        onRestartAllServices={restartAllServices}
         onDemoGuard={toggleDemoGuard}
         autoMode={autoMode}
         onAutoMode={toggleAutoMode}
@@ -1616,6 +1699,7 @@ function TopBar({
   onTimeframe,
   onRefresh,
   onRestartBackend,
+  onRestartAllServices,
   onDemoGuard,
   autoMode,
   onAutoMode
@@ -1628,6 +1712,7 @@ function TopBar({
   onTimeframe: (value: Timeframe) => void;
   onRefresh: () => void;
   onRestartBackend: () => void;
+  onRestartAllServices: () => void;
   onDemoGuard: (enabled: boolean) => void;
   autoMode: AutoModeStatus | null;
   onAutoMode: (enabled: boolean) => void;
@@ -1653,6 +1738,10 @@ function TopBar({
       >
         <Activity size={15} />
         <span>{backendHealth?.active ? "Backend Active" : "Backend Offline"}</span>
+      </button>
+      <button className="service-restart-chip" onClick={onRestartAllServices} title="Restart backend and start frontend if port 5174 is down">
+        <Activity size={15} />
+        <span>Restart all</span>
       </button>
       <div className={`connection ${status?.connected ? "connected" : "offline"}`} title={status?.message}>
         <PlugZap size={16} />
@@ -2323,7 +2412,7 @@ function PositionCard({
         <div>
           <span className="panel-title">Position</span>
           <h2>Open position monitor</h2>
-          <small>Auto TP closes any position once floating profit reaches $10.</small>
+          <small>Auto trailing starts once floating profit reaches $10; SL then follows peak price.</small>
         </div>
         <div className={`position-pnl ${totalProfit >= 0 ? "positive" : "negative"}`}>
           <span>Floating P/L</span>
@@ -2716,6 +2805,24 @@ function riskModeSuffix(mode: RiskMode) {
 function formatActiveSymbols(value: SymbolName[] | null | undefined) {
   if (!value || value.length === 0) return "None";
   return value.join(", ");
+}
+
+function formatServiceActions(actions: ServiceRestartAction[]) {
+  if (!actions.length) return "";
+  return actions.map((action) => `${action.service}:${action.status}`).join(" | ");
+}
+
+function formatSeconds(value: number) {
+  return `${value.toFixed(value % 1 === 0 ? 0 : 1)}s`;
+}
+
+function formatTrailingRules(rules: AutoTrailingRule[] | null | undefined) {
+  if (!rules || rules.length === 0) return "Trigger $10";
+  return rules.map((rule) => `${rule.symbol} ${formatCompactNumber(rule.distancePips)}p/${formatCompactNumber(rule.stepPips)}p`).join(" - ");
+}
+
+function formatCompactNumber(value: number) {
+  return value.toFixed(value % 1 === 0 ? 0 : 2);
 }
 
 function normalizeInvestingStatuses(response: InvestingStatusCollection | InvestingStatusResponse) {

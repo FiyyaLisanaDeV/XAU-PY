@@ -406,6 +406,39 @@ class MT5Bridge:
             return False, f"MT5 trailing stop rejected request: {comment}", selected.stopLoss, candidate_sl, profit_pips
         return True, f"Trailing stop updated to {candidate_sl} at {profit_pips:g} pips profit.", selected.stopLoss, candidate_sl, profit_pips
 
+    def modify_position_stop(self, ticket: int, stop_loss: float, take_profit: float | None = None) -> tuple[bool, str, float | None, float | None]:
+        if mt5 is None or not self.initialize():
+            return False, "MT5 is not connected; stop loss was not updated.", None, None
+        terminal = mt5.terminal_info()
+        account = mt5.account_info()
+        if not bool(getattr(terminal, "trade_allowed", False)) or not bool(getattr(account, "trade_allowed", False)):
+            return False, "MT5 trading is blocked. Enable Algo Trading/AutoTrading in the MT5 terminal.", None, None
+        selected = self._select_position(self.open_positions(), ticket=ticket, symbol=None)
+        if selected is None:
+            return False, "No matching open position was found.", None, None
+        info = mt5.symbol_info(selected.broker_symbol)
+        if info is None:
+            return False, "Symbol info is unavailable for stop loss update.", selected.stopLoss, None
+        digits = int(getattr(info, "digits", 5))
+        rounded_sl = round(stop_loss, digits)
+        request: dict[str, Any] = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "position": selected.ticket,
+            "symbol": selected.broker_symbol,
+            "sl": rounded_sl,
+            "tp": take_profit or selected.takeProfit or 0.0,
+            "magic": int(os.getenv("XAUGBPEUUSD_MT5_MAGIC", "260603")),
+            "comment": "XAUGBPEUUSD auto trailing",
+        }
+        result = mt5.order_send(request)
+        if result is None:
+            return False, f"MT5 stop loss update returned no result. Last error: {mt5.last_error()}", selected.stopLoss, rounded_sl
+        retcode = getattr(result, "retcode", None)
+        comment = getattr(result, "comment", None) or retcode
+        if retcode not in {10008, 10009}:
+            return False, f"MT5 stop loss update rejected request: {comment}", selected.stopLoss, rounded_sl
+        return True, f"Stop loss updated to {rounded_sl}.", selected.stopLoss, rounded_sl
+
     @staticmethod
     def _pip_size(info: Any) -> float:
         point = float(getattr(info, "point", 0.00001) or 0.00001)

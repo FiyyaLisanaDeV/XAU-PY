@@ -106,6 +106,11 @@ button {
   color: #ffffff;
 }
 
+.summary-refresh.service-restart {
+  background: #0f766e;
+  border-color: #0f766e;
+}
+
 .summary-nav {
   justify-content: center;
 }
@@ -829,7 +834,7 @@ button {
 
 .topbar {
   display: grid;
-  grid-template-columns: minmax(230px, 1fr) repeat(5, max-content) minmax(96px, max-content) minmax(82px, max-content) minmax(120px, max-content) 42px;
+  grid-template-columns: minmax(230px, 1fr) repeat(6, max-content) minmax(96px, max-content) minmax(82px, max-content) minmax(120px, max-content) 42px;
   align-items: center;
   gap: 12px;
   min-height: 72px;
@@ -876,6 +881,7 @@ button {
 
 .connection,
 .backend-chip,
+.service-restart-chip,
 .demo-chip,
 .auto-chip,
 .account-chip,
@@ -915,6 +921,13 @@ button {
   border-color: #fecaca;
   color: #b91c1c;
   background: #fef2f2;
+  font-weight: 900;
+}
+
+.service-restart-chip {
+  border-color: #99f6e4;
+  color: #0f766e;
+  background: #f0fdfa;
   font-weight: 900;
 }
 
@@ -2618,6 +2631,7 @@ th {
 
   .brand,
   .backend-chip,
+  .service-restart-chip,
   .connection,
   .demo-chip,
   .auto-chip,
