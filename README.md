@@ -1,93 +1,162 @@
-# XAUGBPEUUSD Strategy App
+# XAU-PY Trading Dashboard
 
-Local strategy dashboard for `XAUUSD` and `EURUSD` with Exness MT5 integration.
+Local FastAPI + React dashboard for `XAUUSD` and `EURUSD` trading workflow with MT5 integration, Full Auto controls, risk guard, Investing.com confirmation, account summary, and execution monitoring.
 
-The app is demo-first and uses mandatory confirmation before order execution. When MT5 is not installed or not connected, the backend serves mock market data for UI/strategy development and blocks real execution.
+> This app is built as a local trading assistant. It does not guarantee profit. Every automated decision is still constrained by MT5 status, demo guard, spread, stop loss, total risk cap, lot cap, and Investing.com confirmation.
 
-## Stack
+## Quick Links
 
-- Frontend: React + Vite
-- Backend: FastAPI
-- Trading bridge: optional `MetaTrader5` Python package with local Exness MT5 terminal
+| Area | File |
+| --- | --- |
+| Feature catalog | [docs/FEATURES.md](docs/FEATURES.md) |
+| Strategy and risk guide | [docs/STRATEGY_AND_RISK.md](docs/STRATEGY_AND_RISK.md) |
+| Decision guide | [docs/APP_DECISION_GUIDE.md](docs/APP_DECISION_GUIDE.md) |
+| Change log | [docs/CHANGELOG.md](docs/CHANGELOG.md) |
 
-## Setup
+## Current Defaults
+
+| Setting | Value |
+| --- | --- |
+| Backend | `http://127.0.0.1:9000` |
+| Frontend | `http://127.0.0.1:5174` |
+| Active pairs | `XAUUSD`, `EURUSD` |
+| Removed pair | `GBPUSD` |
+| Execution timeframes | `M15`, `M30`, `H1` |
+| Monitor-only timeframes | `H4`, `D1` |
+| Minimum confluence score | `60` |
+| Total risk cap | `20%` equity |
+| Max lot per position | `0.10` |
+| Auto TP | close floating profit `>= $10` |
+| Investing auto sync | every `60 seconds` |
+
+## How The System Decides
+
+```mermaid
+flowchart TD
+  A[MT5 candles and ticks] --> B[Build market snapshot]
+  B --> C[Confluence score]
+  C --> D{Score >= 60?}
+  D -- no --> X[Blocked: weak setup]
+  D -- yes --> E[Investing.com timeframe confirmation]
+  E --> F{Direction aligned?}
+  F -- no --> Y[Blocked: external bias conflict]
+  F -- yes --> G[Risk validation]
+  G --> H{Risk, spread, lot, SL valid?}
+  H -- no --> Z[Blocked: safety guard]
+  H -- yes --> I[Full Auto can execute on M15/M30/H1]
+```
+
+Short version:
+
+1. MT5 data creates the trade idea.
+2. Confluence score decides if the setup is technically worth considering.
+3. Investing.com confirms the direction by timeframe.
+4. Risk engine decides if the trade is allowed.
+5. Full Auto executes only if every guard passes.
+
+## Investing.com Timeframe Map
+
+The app stores Investing.com timeframe signals and maps them to internal strategy timeframes:
+
+| App timeframe | Investing timeframe | Use |
+| --- | --- | --- |
+| `M15` | `15m` | execution confirmation, often locked by Investing |
+| `M30` | `30m` | execution confirmation |
+| `H1` | `1h` | execution confirmation |
+| `H4` | `5h` | monitor/context confirmation |
+| `D1` | `1d` | monitor/context confirmation |
+
+If `15m` is locked, the backend will not pretend it has valid 15m data. It records locked status and falls back carefully where needed instead of using empty data as a trade signal.
+
+## Run Locally
+
+Install dependencies:
 
 ```powershell
 npm install
 python -m pip install -r requirements.txt
 ```
 
-If the `MetaTrader5` Python package does not support the default Python version, install a compatible Python version and install `MetaTrader5` there.
-
-## Run
-
-Terminal 1:
+Start backend on port `9000`:
 
 ```powershell
-python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 9000
+.\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 9000
 ```
 
-Terminal 2:
+Start frontend on port `5174`:
 
 ```powershell
 npm run dev
 ```
 
-Open `http://127.0.0.1:5174`.
+Open:
 
-## MT5 Execution Requirements
+```text
+http://127.0.0.1:5174
+```
+
+Production-style local launch:
+
+```powershell
+.\launch-app.ps1
+```
+
+## MT5 Setup
 
 1. Install Exness MT5 locally.
 2. Log in to an Exness demo account first.
 3. Enable Algo Trading in MT5.
-4. Install the `MetaTrader5` Python package in a compatible Python environment.
-5. Optionally set `MT5_TERMINAL_PATH` if the terminal is not auto-detected.
+4. Install the `MetaTrader5` Python package in the Python environment used by the backend.
+5. If MT5 is not auto-detected, set `MT5_TERMINAL_PATH`.
 
-The app blocks execution when:
-
-- MT5 is offline.
-- The user has not confirmed the modal.
-- Risk exceeds `0.5%`.
-- Lot exceeds `0.10`; backend caps calculated and outgoing MT5 volume to `0.10` per position.
-- Entry, SL, or TP are invalid.
-- The signal has no valid single recommended order.
-
-Open positions are monitored while the backend is active. Any position with floating profit `>= $10` is checked every second and closed immediately by the backend as auto take profit.
-
-## Economic Calendar
-
-The dashboard includes an Economic Events box powered by MQL5 Calendar exports.
-
-The Python `MetaTrader5` package does not expose the MQL5 calendar functions directly, so real event data must be exported from MetaTrader 5 using the script in `mql5/ExportEconomicCalendar.mq5`.
-
-Expected backend file:
+EA backend URL:
 
 ```text
-data/economic_calendar.json
+http://127.0.0.1:9000/api/ea/status
 ```
 
-Setup:
+## Main API Endpoints
 
-1. Open MetaEditor from MetaTrader 5.
-2. Add and compile `mql5/ExportEconomicCalendar.mq5`.
-3. Run it manually or schedule it with an EA/timer.
-4. Refresh the app; `/api/economic-calendar` will load USD, GBP, and EUR events.
-
-MQL5 calendar docs: https://www.mql5.com/en/docs/calendar
-
-## Potential Signal Dataset
-
-The backend records every scanned signal with confluence score `>= 60` to:
-
-```text
-data/potential_signals.jsonl
-```
-
-Each row includes detection date, day, time, symbol, timeframe, score, setup type, side/order type, entry, SL, TP, lot, risk percent, spread, reasons, and blocked reasons. The frontend runs `/api/signals/scan` every 60 seconds across `XAUUSD`, `EURUSD` and `M15`, `M30`, `H1`, `H4`, `D1`, then displays the newest rows in the Potential Signals Data table. Duplicate matching signals are suppressed for 30 minutes.
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/status` | MT5 account and trade readiness |
+| `GET /api/ea/status` | compact EA/backend health payload |
+| `GET /api/auto-mode/status` | Full Auto status and exposure |
+| `POST /api/auto-mode` | save Full Auto and risk settings |
+| `POST /api/auto-mode/scan-now` | run immediate auto scan |
+| `GET /api/investing/status` | Investing sync status by pair |
+| `GET /api/investing/technical` | Investing technical, timeframe, MA, indicator, pivot data |
+| `POST /api/investing/sync` | manual Investing sync |
+| `GET /api/journal` | realized trade journal |
+| `POST /api/data/reset` | reset local dashboard baseline |
 
 ## Verification
 
 ```powershell
+.\.venv\Scripts\python.exe -m pytest backend/tests
+$env:ESBUILD_BINARY_PATH = (Resolve-Path node_modules\@esbuild\win32-x64\esbuild.exe).Path
 npm run build
-python -m pytest backend/tests
 ```
+
+Expected current baseline:
+
+```text
+backend tests: passing
+frontend build: passing
+backend port: 9000
+frontend port: 5174
+```
+
+## Data Files
+
+Runtime files are intentionally ignored from Git:
+
+```text
+data/investing_*.json
+data/reset_state.json
+data/potential_signals.jsonl
+.tmp/
+```
+
+These are live state/cache files and should not be treated as source code.
+

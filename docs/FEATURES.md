@@ -1,0 +1,111 @@
+# Feature Catalog
+
+This page lists the main user-facing and backend features in the XAU-PY trading dashboard.
+
+## Account Summary
+
+| Feature | Description |
+| --- | --- |
+| P/L Total | Realized closed-trade P/L from the reset baseline onward |
+| P/L Daily | Realized closed-trade P/L for today only, using local day grouping |
+| Current Position P/L | Floating P/L from open MT5 positions |
+| Daily Target | Shows progress toward a 10% daily account target |
+| Open Positions | Count of open positions, split into winning and losing |
+| Profit Factor | Gross winning P/L divided by gross losing P/L |
+| Pair Performance | Winning/losing count and nominal USD per pair |
+
+## Position Controls
+
+| Control | Behavior |
+| --- | --- |
+| Close all winning trades | Closes currently open positions with floating profit above zero |
+| Close all losing trades | Closes currently open positions with floating profit below zero |
+| Close all open trades | Closes every open position after confirmation |
+| Auto TP | Backend closes positions with floating profit `>= $10` |
+| Reset all data | Resets local dashboard baseline without deleting broker history or closing positions |
+
+## Full Auto
+
+Full Auto can send orders automatically when all safety checks pass.
+
+| Setting | Default |
+| --- | --- |
+| Enabled | user controlled |
+| Active pairs | `XAUUSD`, `EURUSD` |
+| Minimum score | `60` |
+| Scan interval | `15 seconds` |
+| Duplicate cooldown | `10 minutes` |
+| Risk mode | `percent_equity` |
+| Risk value | `0.5` |
+| Total risk cap | `20%` |
+
+Full Auto only executes on:
+
+```text
+M15, M30, H1
+```
+
+It monitors but does not execute on:
+
+```text
+H4, D1
+```
+
+## Active Pair Switches
+
+The Settings page can enable or disable auto-entry by pair.
+
+| Pair | Can be displayed | Can be auto-traded |
+| --- | --- | --- |
+| `XAUUSD` | yes | only if enabled |
+| `EURUSD` | yes | only if enabled |
+
+If a pair is disabled, it can still appear in data tables, but strategy execution is blocked for that pair.
+
+## Investing.com Data Page
+
+The Investing page shows one section per pair.
+
+| Section | Purpose |
+| --- | --- |
+| Sync card | Shows sync status, cache age, parser status, strategy use, retry count |
+| Confirmation snapshot | Shows overall bias, selected Investing timeframe, last sync, pivot source |
+| Technical bias | Shows overall, moving-average, and indicator bias |
+| Timeframe map | Shows Investing timeframe signals and which app timeframe uses each signal |
+| Technical indicators | RSI, Stoch, ADX, CCI, ATR, ROC, and other parsed values |
+| Moving averages | MA/MACD signals from Investing |
+| Fibonacci pivot levels | Clean `S3/S2/S1/PIVOT/R1/R2/R3` support/resistance table |
+
+## Investing Timeframe Coverage
+
+| Investing tab | Stored | Used by app |
+| --- | --- | --- |
+| `5m` | yes when visible | not mapped |
+| `15m` | yes when visible | `M15` |
+| `30m` | yes | `M30` |
+| `1h` | yes | `H1` |
+| `5h` | yes | `H4` |
+| `1d` | yes | `D1` |
+| `1w` | yes | monitoring only |
+| `1mo` | yes | monitoring only |
+
+## Backend Monitoring
+
+| Monitor | Interval | Behavior |
+| --- | --- | --- |
+| Auto TP monitor | `1 second` | closes positions with floating profit `>= $10` |
+| Full Auto strategy monitor | configurable, default `15 seconds` | scans and executes if valid |
+| Investing sync monitor | `60 seconds` | refreshes Investing technical data for all active source symbols |
+
+## Safety Features
+
+- Demo guard for non-demo account protection.
+- MT5 connected and trade-ready checks.
+- Spread limits.
+- SL/TP direction validation.
+- Lot capped at `0.10`.
+- Total risk cap at `20%`.
+- Duplicate auto-entry cooldown.
+- Pending orders and open positions included in exposure.
+- Missing stop loss blocks Full Auto exposure.
+
