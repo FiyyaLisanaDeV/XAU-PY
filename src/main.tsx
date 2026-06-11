@@ -1189,35 +1189,49 @@ function App() {
         <>
       <section className="summary-quotes top">
         {symbols.map((item) => (
-          <div key={item} className="quote-card">
-            <span>{item}</span>
+          <div key={item} className="quote-card market-quote">
+            <div className="quote-card-heading">
+              <span>{item}</span>
+              <small>LIVE</small>
+            </div>
             <strong>{formatPrice(ticks[item]?.mid ?? null)}</strong>
-            <small>Spread {formatSpread(ticks[item]?.spread_points ?? null)} pts</small>
+            <div className="quote-card-footer">
+              <span>Spread</span>
+              <b>{formatSpread(ticks[item]?.spread_points ?? null)} pts</b>
+            </div>
           </div>
         ))}
-        <div className="quote-card">
-          <span>Full Auto</span>
+        <div className={`quote-card system-card ${autoMode?.enabled ? "enabled" : "disabled"}`}>
+          <div className="quote-card-heading"><span>Full Auto</span><small>{autoMode?.shadowMode ? "SHADOW" : "LIVE"}</small></div>
           <strong>{autoMode?.enabled ? "ON" : "OFF"}</strong>
-          <small>Total risk cap {formatPercent(autoMode?.maxTotalRiskPercent ?? 20)}</small>
-          <small>Active {formatActiveSymbols(autoMode?.activeSymbols)}</small>
+          <div className="system-card-detail">
+            <span>Risk cap <b>{formatPercent(autoMode?.maxTotalRiskPercent ?? 20)}</b></span>
+            <span>Pairs <b>{formatActiveSymbols(autoMode?.activeSymbols)}</b></span>
+          </div>
         </div>
-        <div className="quote-card">
-          <span>Account Mode</span>
+        <div className="quote-card system-card">
+          <div className="quote-card-heading"><span>Account Mode</span><small>{status?.currency ?? "--"}</small></div>
           <strong>{accountMode}</strong>
-          <small>{accountMode === "USC" ? "100 USC = 1 USD" : "Standard dollar account"}</small>
-          <small>Broker: {status?.currency ?? "--"}</small>
+          <div className="system-card-detail">
+            <span>{accountMode === "USC" ? "100 USC = 1 USD" : "Standard dollar"}</span>
+            <span>Broker <b>{status?.currency ?? "--"}</b></span>
+          </div>
         </div>
-        <div className="quote-card">
-          <span>Auto Trailing</span>
+        <div className="quote-card system-card">
+          <div className="quote-card-heading"><span>Auto Trailing</span><small>{formatSeconds(autoTrailing?.monitorIntervalSeconds ?? 1)}</small></div>
           <strong>{autoTrailing?.activeTickets ?? 0}/{autoTrailing?.trackedTickets ?? 0}</strong>
-          <small>Always ON - checks every {formatSeconds(autoTrailing?.monitorIntervalSeconds ?? 1)}</small>
-          <small>{formatTrailingRules(autoTrailing?.rules)}</small>
+          <div className="system-card-detail">
+            <span>Active / tracked tickets</span>
+            <span className="truncate-detail">{formatTrailingRules(autoTrailing?.rules)}</span>
+          </div>
         </div>
-        <div className="quote-card">
-          <span>Hedge Recovery</span>
+        <div className={`quote-card system-card ${recoveryStatus?.enabled ? "enabled" : "disabled"}`}>
+          <div className="quote-card-heading"><span>Hedge Recovery</span><small>{formatSeconds(recoveryStatus?.monitorIntervalSeconds ?? 5)}</small></div>
           <strong>{recoveryStatus?.enabled ? "ON" : "OFF"}</strong>
-          <small>{formatRecoveryPhases(recoveryStatus?.cycles)}</small>
-          <small>Checks every {formatSeconds(recoveryStatus?.monitorIntervalSeconds ?? 5)}</small>
+          <div className="system-card-detail">
+            <span>Pair state</span>
+            <span className="truncate-detail">{formatRecoveryPhases(recoveryStatus?.cycles)}</span>
+          </div>
         </div>
       </section>
 
