@@ -86,3 +86,34 @@ def test_xau_aggregate_exposure_guard_simulates_1500_candidates():
             assert result.status in {"BLOCKED", "CLOSE_ONLY"}
             assert any("aggregate SL exposure" in reason for reason in result.reasons)
 
+
+def test_shadow_transition_warns_without_enforcing_close_only():
+    profile = default_pair_profiles()["XAUUSD"]
+    position = OpenPosition(
+        ticket=2,
+        symbol="XAUUSD",
+        broker_symbol="XAUUSDm",
+        side=Side.BUY,
+        volume=0.10,
+        open_price=4400.0,
+        current_price=4400.0,
+        stopLoss=4200.0,
+        takeProfit=4500.0,
+        profit=0.0,
+        swap=0.0,
+        commission=0.0,
+        opened_at=datetime.now(timezone.utc).isoformat(),
+    )
+    result = build_pair_exposure(
+        "XAUUSD",
+        profile,
+        PairState(symbol="XAUUSD"),
+        [position],
+        [],
+        100.0,
+        100.0,
+        shadow_transition=True,
+    )
+    assert result.status == "WARNING"
+    assert result.tradeMode == "NORMAL"
+    assert any("CLOSE_ONLY not enforced" in reason for reason in result.reasons)

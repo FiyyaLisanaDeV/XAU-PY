@@ -70,6 +70,7 @@ def build_pair_exposure(
     equity_usd: float,
     candidate: tuple[float, float, float, Side] | None = None,
     enforce_trade_limits: bool = True,
+    shadow_transition: bool = False,
 ) -> PairExposureStatus:
     pair_positions = [item for item in positions if item.symbol == symbol]
     pair_pending = [item for item in pending_orders if item.symbol == symbol]
@@ -86,11 +87,13 @@ def build_pair_exposure(
             reasons.append(f"{symbol} blocked: pending order without SL prevents new exposure")
             continue
         aggregate_risk += risk_usd_for(symbol, item.entry, item.stopLoss, item.volume)
+    current_aggregate_risk = aggregate_risk
     if candidate is not None:
         entry, stop_loss, lot, _candidate_side = candidate
         aggregate_risk += risk_usd_for(symbol, entry, stop_loss, lot)
 
     base = max(min(balance_usd, equity_usd), 0.01)
+    current_aggregate_percent = round(current_aggregate_risk / base * 100, 3)
     aggregate_percent = round(aggregate_risk / base * 100, 3)
     buy_count = sum(1 for item in pair_positions if item.side == Side.BUY)
     sell_count = sum(1 for item in pair_positions if item.side == Side.SELL)
@@ -118,8 +121,18 @@ def build_pair_exposure(
         reasons.append(f"{symbol} blocked: daily trade limit reached")
     if enforce_trade_limits and profile.maxHourlyTrades > 0 and state.hourlyTradeCount >= profile.maxHourlyTrades:
         reasons.append(f"{symbol} blocked: hourly trade limit reached")
-    if aggregate_percent > profile.aggregateSlRiskCapPercent:
+    aggregate_breach = aggregate_percent > profile.aggregateSlRiskCapPercent
+    transition_warning = (
+        shadow_transition
+        and candidate is None
+        and current_aggregate_percent > profile.aggregateSlRiskCapPercent
+    )
+    if aggregate_breach and not transition_warning:
         reasons.append(f"{symbol} blocked: aggregate SL exposure exceeds configured limit")
+    elif transition_warning:
+        reasons.append(
+            f"{symbol} shadow transition warning: aggregate SL exposure exceeds configured limit; CLOSE_ONLY not enforced"
+        )
 
     now = datetime.now(timezone.utc)
     locked = False
@@ -128,7 +141,14 @@ def build_pair_exposure(
             locked = datetime.fromisoformat(state.lockedUntil) > now
         except ValueError:
             locked = True
-    close_only = profile.closeOnly or state.closeOnlyMode or aggregate_percent > profile.aggregateSlRiskCapPercent
+    close_only = (
+        profile.closeOnly
+        or state.closeOnlyMode
+        or (
+            current_aggregate_percent > profile.aggregateSlRiskCapPercent
+            and not shadow_transition
+        )
+    )
     if close_only:
         status = "CLOSE_ONLY"
         trade_mode = "CLOSE_ONLY"
@@ -136,6 +156,9 @@ def build_pair_exposure(
         status = "LOCKED"
         trade_mode = "LOCKED"
         reasons.append(state.lockReason or f"{symbol} blocked: pair lock active")
+    elif transition_warning:
+        status = "WARNING"
+        trade_mode = "NORMAL"
     elif reasons:
         status = "BLOCKED"
         trade_mode = "NORMAL"

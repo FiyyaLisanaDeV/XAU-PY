@@ -920,6 +920,7 @@ def build_all_pair_exposure() -> list[PairExposureStatus]:
             pending,
             balance_usd,
             equity_usd,
+            shadow_transition=auto_config.shadowMode,
         )
         for symbol in SCAN_SYMBOLS
     ]
@@ -978,10 +979,10 @@ def sync_pair_states_from_closed_trades(entries: list[TradingJournalEntry] | Non
             locked_until = (now + timedelta(days=1)).isoformat()
             lock_reason = f"{symbol} blocked: consecutive stop-loss lock"
         daily_loss_usd = abs(sum(min(usd_from_broker_money(entry.profit or 0), 0) for entry in daily_entries))
-    try:
-        equity_usd = max(account_equity_usd(), 0.01)
-    except AttributeError:
-        equity_usd = 0.01
+        try:
+            equity_usd = max(account_equity_usd(), 0.01)
+        except AttributeError:
+            equity_usd = 0.01
         daily_loss_percent = round(daily_loss_usd / equity_usd * 100, 3)
         if profile.dailyLossLimitPercent > 0 and daily_loss_percent >= profile.dailyLossLimitPercent:
             locked_until = datetime.combine(today + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc).isoformat()
@@ -1258,6 +1259,7 @@ def open_recovery_order(
             usd_from_broker_money(account.equity) if account else account_equity,
             (entry, stop_loss, validation.lot, side),
             enforce_trade_limits=False,
+            shadow_transition=auto_config.shadowMode,
         )
         if pair_exposure.status in {"BLOCKED", "CLOSE_ONLY", "LOCKED"}:
             return False, None, "; ".join(pair_exposure.reasons) or f"{symbol} recovery blocked by exposure state."
@@ -1853,6 +1855,7 @@ def run_auto_scan() -> AutoScanResponse:
                 usd_from_broker_money(account_snapshot.balance),
                 usd_from_broker_money(account_snapshot.equity),
                 (signal.entry or 0.0, signal.stopLoss or 0.0, validation.lot or 0.0, signal.side),
+                shadow_transition=auto_config.shadowMode,
             )
             snapshot = market_snapshot(signal.symbol, signal.timeframe)
             gate = evaluate_pair_gate(
@@ -1891,7 +1894,7 @@ def run_auto_scan() -> AutoScanResponse:
             if gate_reasons:
                 append_audit(SIGNAL_AUDIT_PATH, {**audit_base, "finalAction": "BLOCKED"})
                 blocked.extend(f"{signal.symbol} {signal.timeframe}: {reason}" for reason in gate_reasons)
-                if pair_exposure.tradeMode == "CLOSE_ONLY":
+                if pair_exposure.tradeMode == "CLOSE_ONLY" and not auto_config.shadowMode:
                     pair_state_store.update(
                         signal.symbol,
                         closeOnlyMode=True,
