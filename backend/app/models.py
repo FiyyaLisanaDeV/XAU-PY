@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -399,6 +399,7 @@ class SignalLogEntry(BaseModel):
 class AutoModeRequest(BaseModel):
     enabled: bool
     activeSymbols: list[Symbol] = Field(default_factory=lambda: ["XAUUSD", "EURUSD"])
+    hardTakeProfitUsd: dict[Symbol, Annotated[float, Field(gt=0)]] = Field(default_factory=lambda: {"XAUUSD": 10.0, "EURUSD": 10.0})
     maxTotalRiskPercent: float = Field(default=20.0, gt=0, le=100)
     minScore: int = Field(default=60, ge=0, le=100)
     riskMode: RiskMode = RiskMode.PERCENT_EQUITY
@@ -421,6 +422,7 @@ class AutoExecutionItem(BaseModel):
 class AutoModeStatus(BaseModel):
     enabled: bool = False
     activeSymbols: list[Symbol] = Field(default_factory=lambda: ["XAUUSD", "EURUSD"])
+    hardTakeProfitUsd: dict[Symbol, Annotated[float, Field(gt=0)]] = Field(default_factory=lambda: {"XAUUSD": 10.0, "EURUSD": 10.0})
     maxTotalRiskPercent: float = 20.0
     minScore: int = 60
     riskMode: RiskMode = RiskMode.PERCENT_EQUITY

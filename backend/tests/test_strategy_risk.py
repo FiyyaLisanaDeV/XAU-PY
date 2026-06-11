@@ -304,6 +304,7 @@ def test_hard_take_profit_closes_at_ten_dollars(monkeypatch):
 
     fake_bridge = FakeBridge()
     monkeypatch.setattr(main_module, "bridge", fake_bridge)
+    monkeypatch.setattr(main_module.auto_config, "hardTakeProfitUsd", {"XAUUSD": 10.0, "EURUSD": 10.0})
     main_module.trailing_states.clear()
     main_module.trailing_last_attempts.clear()
     main_module.hard_tp_last_attempts.clear()
@@ -352,7 +353,7 @@ def test_auto_trailing_sell_uses_ask_peak_and_original_sl_guard(monkeypatch):
 
     fake_bridge = FakeBridge()
     monkeypatch.setattr(main_module, "bridge", fake_bridge)
-    monkeypatch.setattr(main_module, "AUTO_TAKE_PROFIT_USD", 100.0)
+    monkeypatch.setattr(main_module.auto_config, "hardTakeProfitUsd", {"XAUUSD": 100.0, "EURUSD": 100.0})
     main_module.trailing_states.clear()
     main_module.trailing_last_attempts.clear()
 
@@ -438,7 +439,7 @@ def test_auto_trailing_rolls_back_state_when_modify_fails(monkeypatch):
             return False, "rejected", profitable.stopLoss, round(stop_loss, 2)
 
     monkeypatch.setattr(main_module, "bridge", FakeBridge())
-    monkeypatch.setattr(main_module, "AUTO_TAKE_PROFIT_USD", 100.0)
+    monkeypatch.setattr(main_module.auto_config, "hardTakeProfitUsd", {"XAUUSD": 100.0, "EURUSD": 100.0})
     main_module.trailing_states.clear()
     main_module.trailing_last_attempts.clear()
 

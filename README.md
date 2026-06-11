@@ -26,7 +26,7 @@ Local FastAPI + React dashboard for `XAUUSD` and `EURUSD` trading workflow with 
 | Minimum confluence score | `60` |
 | Total risk cap | `20%` equity |
 | Max lot per position | `0.10` |
-| Hard TP | closes position when floating profit `>= $10` |
+| Hard TP | configurable per pair, default `XAUUSD $10` and `EURUSD $10` |
 | Investing auto sync | every `60 seconds` |
 | Restart all services | frontend button starts `5174` if needed and restarts backend `9000` |
 

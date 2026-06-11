@@ -207,6 +207,7 @@ interface RiskExposure {
 interface AutoModeStatus {
   enabled: boolean;
   activeSymbols: SymbolName[];
+  hardTakeProfitUsd: Record<SymbolName, number>;
   maxTotalRiskPercent: number;
   minScore: number;
   riskMode: RiskMode;
@@ -289,6 +290,8 @@ interface ConfluenceScoreCard {
 interface StrategyRiskSettings {
   enabled: boolean;
   activeSymbols: SymbolName[];
+  xauusdHardTpUsd: string;
+  eurusdHardTpUsd: string;
   maxTotalRiskPercent: string;
   minScore: string;
   riskMode: RiskMode;
@@ -441,6 +444,8 @@ const INVESTING_AUTO_SYNC_SECONDS = 60;
 const defaultStrategyRiskSettings: StrategyRiskSettings = {
   enabled: true,
   activeSymbols: ["XAUUSD", "EURUSD"],
+  xauusdHardTpUsd: "10",
+  eurusdHardTpUsd: "10",
   maxTotalRiskPercent: "20",
   minScore: "60",
   riskMode: "percent_equity",
@@ -536,6 +541,8 @@ function App() {
     setStrategySettings({
       enabled: autoMode.enabled,
       activeSymbols: autoMode.activeSymbols ?? ["XAUUSD", "EURUSD"],
+      xauusdHardTpUsd: String(autoMode.hardTakeProfitUsd?.XAUUSD ?? 10),
+      eurusdHardTpUsd: String(autoMode.hardTakeProfitUsd?.EURUSD ?? 10),
       maxTotalRiskPercent: String(autoMode.maxTotalRiskPercent),
       minScore: String(autoMode.minScore),
       riskMode: autoMode.riskMode,
@@ -551,7 +558,11 @@ function App() {
   const dailyProgress = dailyTarget > 0 ? Math.min(Math.max((summary.dailyPnl / dailyTarget) * 100, 0), 100) : 0;
 
   async function closePositionGroup(kind: "winning" | "losing") {
-    const selected = positions.filter((position) => (kind === "winning" ? position.profit >= 10 : position.profit < 0));
+    const selected = positions.filter((position) => (
+      kind === "winning"
+        ? position.profit >= (autoMode?.hardTakeProfitUsd?.[position.symbol] ?? 10)
+        : position.profit < 0
+    ));
     if (selected.length === 0) {
       setToast(`Tidak ada ${kind} trade terbuka.`);
       return;
@@ -617,6 +628,10 @@ function App() {
       body: JSON.stringify({
         enabled: nextSettings.enabled,
         activeSymbols: nextSettings.activeSymbols.length > 0 ? nextSettings.activeSymbols : ["XAUUSD", "EURUSD"],
+        hardTakeProfitUsd: {
+          XAUUSD: positiveNumber(nextSettings.xauusdHardTpUsd, 10),
+          EURUSD: positiveNumber(nextSettings.eurusdHardTpUsd, 10)
+        },
         maxTotalRiskPercent: clampNumber(nextSettings.maxTotalRiskPercent, 0.1, 100, 20),
         minScore: Math.round(clampNumber(nextSettings.minScore, 0, 100, 60)),
         riskMode: nextSettings.riskMode,
@@ -629,6 +644,8 @@ function App() {
     setStrategySettings({
       enabled: payload.enabled,
       activeSymbols: payload.activeSymbols ?? ["XAUUSD", "EURUSD"],
+      xauusdHardTpUsd: String(payload.hardTakeProfitUsd?.XAUUSD ?? 10),
+      eurusdHardTpUsd: String(payload.hardTakeProfitUsd?.EURUSD ?? 10),
       maxTotalRiskPercent: String(payload.maxTotalRiskPercent),
       minScore: String(payload.minScore),
       riskMode: payload.riskMode,
@@ -702,6 +719,8 @@ function App() {
               setStrategySettings({
                 enabled: autoMode.enabled,
                 activeSymbols: autoMode.activeSymbols ?? ["XAUUSD", "EURUSD"],
+                xauusdHardTpUsd: String(autoMode.hardTakeProfitUsd?.XAUUSD ?? 10),
+                eurusdHardTpUsd: String(autoMode.hardTakeProfitUsd?.EURUSD ?? 10),
                 maxTotalRiskPercent: String(autoMode.maxTotalRiskPercent),
                 minScore: String(autoMode.minScore),
                 riskMode: autoMode.riskMode,
@@ -1200,6 +1219,33 @@ function StrategySettingsPage({
           </div>
         </section>
 
+        <section className="settings-card">
+          <div className="settings-card-heading">
+            <strong>Hard Take Profit</strong>
+            <span>USD per position</span>
+          </div>
+          <SettingsNumber
+            label="XAUUSD Hard TP"
+            value={settings.xauusdHardTpUsd}
+            min={0.01}
+            step={0.01}
+            suffix="USD"
+            onChange={(value) => onChange({ xauusdHardTpUsd: value })}
+          />
+          <SettingsNumber
+            label="EURUSD Hard TP"
+            value={settings.eurusdHardTpUsd}
+            min={0.01}
+            step={0.01}
+            suffix="USD"
+            onChange={(value) => onChange({ eurusdHardTpUsd: value })}
+          />
+          <div className="settings-risk-preview">
+            <Metric label="XAUUSD close at" value={formatMoney(positiveNumber(settings.xauusdHardTpUsd, 10))} />
+            <Metric label="EURUSD close at" value={formatMoney(positiveNumber(settings.eurusdHardTpUsd, 10))} />
+          </div>
+        </section>
+
         <section className="settings-card settings-guide">
           <div className="settings-card-heading">
             <strong>Execution rules</strong>
@@ -1209,7 +1255,8 @@ function StrategySettingsPage({
             <span>M15, M30, H1 = execution timeframe</span>
             <span>H4, D1 = monitor/context only</span>
             <span>Lot max per position tetap 0.10</span>
-            <span>Hard TP menutup posisi saat floating profit {">="} $10</span>
+            <span>XAUUSD Hard TP: {formatMoney(positiveNumber(settings.xauusdHardTpUsd, 10))}</span>
+            <span>EURUSD Hard TP: {formatMoney(positiveNumber(settings.eurusdHardTpUsd, 10))}</span>
             <span>Pair aktif auto-entry: {formatActiveSymbols(settings.activeSymbols)}</span>
           </div>
         </section>
@@ -1560,6 +1607,8 @@ function LegacyApp() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         enabled,
+        activeSymbols: autoMode?.activeSymbols ?? ["XAUUSD", "EURUSD"],
+        hardTakeProfitUsd: autoMode?.hardTakeProfitUsd ?? { XAUUSD: 10, EURUSD: 10 },
         maxTotalRiskPercent: 20,
         minScore: 60,
         riskMode,

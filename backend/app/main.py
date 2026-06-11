@@ -111,13 +111,17 @@ app.add_middleware(
 APP_STARTED_AT = datetime.now(timezone.utc).isoformat()
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RESET_STATE_PATH = PROJECT_ROOT / "data" / "reset_state.json"
+STRATEGY_SETTINGS_PATH = PROJECT_ROOT / "data" / "strategy_settings.json"
 bridge = MT5Bridge()
 history: list[HistoryItem] = []
 journal: list[TradingJournalEntry] = []
 SCAN_SYMBOLS: tuple[Symbol, ...] = ("XAUUSD", "EURUSD")
 SCAN_TIMEFRAMES: tuple[Timeframe, ...] = ("M15", "M30", "H1", "H4", "D1")
 EXECUTION_TIMEFRAMES: tuple[Timeframe, ...] = ("M15", "M30", "H1")
-auto_config = AutoModeRequest(enabled=False)
+try:
+    auto_config = AutoModeRequest.model_validate_json(STRATEGY_SETTINGS_PATH.read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    auto_config = AutoModeRequest(enabled=False)
 auto_last_scan: str | None = None
 auto_last_action: str | None = None
 auto_blocked_reason: str | None = None
@@ -377,6 +381,8 @@ def set_auto_mode(request: AutoModeRequest):
     if not request.activeSymbols:
         request.activeSymbols = list(SCAN_SYMBOLS)
     auto_config = request
+    STRATEGY_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STRATEGY_SETTINGS_PATH.write_text(auto_config.model_dump_json(indent=2), encoding="utf-8")
     auto_last_action = "Full Auto ON" if request.enabled else "Full Auto OFF"
     auto_blocked_reason = None if request.enabled else "Auto mode is OFF"
     return build_auto_status()
@@ -703,6 +709,7 @@ def build_auto_status(exposure: RiskExposure | None = None) -> AutoModeStatus:
     return AutoModeStatus(
         enabled=auto_config.enabled,
         activeSymbols=list(active_scan_symbols()),
+        hardTakeProfitUsd=auto_config.hardTakeProfitUsd,
         maxTotalRiskPercent=auto_config.maxTotalRiskPercent,
         minScore=auto_config.minScore,
         riskMode=auto_config.riskMode,
@@ -790,7 +797,8 @@ def process_trailing_positions() -> list[ClosePositionResult]:
     positions = bridge.open_positions()
     cleanup_trailing_states({position.ticket for position in positions})
     for position in positions:
-        if position.profit >= AUTO_TAKE_PROFIT_USD:
+        hard_tp_usd = auto_config.hardTakeProfitUsd.get(position.symbol, AUTO_TAKE_PROFIT_USD)
+        if position.profit >= hard_tp_usd:
             last_attempt = hard_tp_last_attempts.get(position.ticket)
             if last_attempt is not None and now - last_attempt < timedelta(seconds=3):
                 continue
@@ -805,7 +813,7 @@ def process_trailing_positions() -> list[ClosePositionResult]:
                 )
             )
             if accepted and closed_position:
-                record_hard_take_profit(ticket, closed_position)
+                record_hard_take_profit(ticket, closed_position, hard_tp_usd)
                 auto_last_action = (
                     f"Hard TP closed {closed_position.symbol} ticket {ticket} "
                     f"at ${closed_position.profit:.2f} floating profit"
@@ -844,7 +852,7 @@ def process_trailing_positions() -> list[ClosePositionResult]:
     return results
 
 
-def record_hard_take_profit(ticket: int | None, position: OpenPosition) -> None:
+def record_hard_take_profit(ticket: int | None, position: OpenPosition, hard_tp_usd: float) -> None:
     add_journal(
         TradingJournalEntry(
             time=datetime.now(timezone.utc).isoformat(),
@@ -857,7 +865,7 @@ def record_hard_take_profit(ticket: int | None, position: OpenPosition) -> None:
             profit=position.profit,
             closeReason="tp",
             source="app",
-            note=f"Hard take profit requested at floating profit >= ${AUTO_TAKE_PROFIT_USD:.2f}",
+            note=f"Hard take profit requested at floating profit >= ${hard_tp_usd:.2f}",
         )
     )
     add_history(position.symbol, "H1", 0, "HARD_TP_10_USD", "closed")
@@ -867,7 +875,7 @@ def build_auto_trailing_status() -> AutoTrailingStatus:
     rules = [
         AutoTrailingRule(
             symbol=symbol,
-            triggerUsd=config["trigger_usd"],
+            triggerUsd=auto_config.hardTakeProfitUsd.get(symbol, config["trigger_usd"]),
             distancePips=config["distance_pips"],
             stepPips=config["step_pips"],
             pipSize=config["pip_size"],

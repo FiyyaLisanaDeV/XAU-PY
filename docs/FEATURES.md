@@ -37,6 +37,8 @@ Full Auto can send orders automatically when all safety checks pass.
 | Minimum score | `60` |
 | Scan interval | `15 seconds` |
 | Duplicate cooldown | `10 minutes` |
+| XAUUSD Hard TP | configurable USD amount, default `$10` |
+| EURUSD Hard TP | configurable USD amount, default `$10` |
 | Risk mode | `percent_equity` |
 | Risk value | `0.5` |
 | Total risk cap | `20%` |

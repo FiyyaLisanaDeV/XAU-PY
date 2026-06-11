@@ -160,6 +160,8 @@ Full Auto executes only when all of these are true:
 
 Hard TP is separate from the strategy signal and takes priority over trailing.
 
+The Settings page stores separate USD thresholds for `XAUUSD` and `EURUSD`. Saved values persist in `data/strategy_settings.json` across backend and laptop restarts.
+
 Behavior:
 
 ```text
