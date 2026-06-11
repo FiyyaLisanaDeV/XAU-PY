@@ -204,6 +204,29 @@ def active_scan_symbols() -> tuple[Symbol, ...]:
     return tuple(active) if active else SCAN_SYMBOLS
 
 
+def account_money_factor() -> float:
+    return 100.0 if auto_config.accountMode == "USC" else 1.0
+
+
+def broker_money_from_usd(value_usd: float) -> float:
+    return value_usd * account_money_factor()
+
+
+def usd_from_broker_money(value: float) -> float:
+    return value / account_money_factor()
+
+
+def format_account_money(value: float) -> str:
+    if auto_config.accountMode == "USC":
+        return f"{value:.2f} USC"
+    return f"${value:.2f}"
+
+
+def account_equity_usd(account=None) -> float:
+    current = account or bridge.status()
+    return usd_from_broker_money(current.equity)
+
+
 def is_symbol_trade_active(symbol: Symbol) -> bool:
     return symbol in active_scan_symbols()
 
@@ -257,6 +280,8 @@ def ea_status():
         "backend": "online",
         "serverTime": datetime.now(timezone.utc).isoformat(),
         "autoEnabled": auto_config.enabled,
+        "accountMode": auto_config.accountMode,
+        "accountMoneyFactor": account_money_factor(),
         "maxTotalRiskPercent": auto_config.maxTotalRiskPercent,
         "minScore": auto_config.minScore,
         "tradeReady": account.trade_ready,
@@ -437,6 +462,16 @@ def recovery_scan_now():
 @app.post("/api/auto-mode", response_model=AutoModeStatus)
 def set_auto_mode(request: AutoModeRequest):
     global auto_config, auto_last_action, auto_blocked_reason
+    if request.accountMode != auto_config.accountMode:
+        active_cycles = any(symbol_has_active_recovery_cycle(symbol) for symbol in SCAN_SYMBOLS)
+        engine_positions = any(is_recovery_engine_position(position) for position in bridge.open_positions())
+        if active_cycles or engine_positions:
+            raise HTTPException(
+                status_code=409,
+                detail="Account mode cannot change while a hedge/recovery basket is active. Close or finish the basket first.",
+            )
+        recovery_cycles.clear()
+        save_recovery_cycles()
     if not request.activeSymbols:
         request.activeSymbols = list(SCAN_SYMBOLS)
     auto_config = request
@@ -533,7 +568,7 @@ def enrich_signal(
                 riskMode=riskMode,
                 riskValue=riskValue,
             ),
-            equity=bridge.status().equity,
+            equity=account_equity_usd(),
             spread_points=snapshot.spread_points,
         )
         signal.lot = validation.lot if validation.valid else None
@@ -546,7 +581,7 @@ def enrich_signal(
 @app.post("/api/orders/validate", response_model=OrderValidation)
 def validate_order_endpoint(request: RiskRequest):
     _, _, spread = bridge.tick(request.symbol)
-    return validate_order(request, equity=bridge.status().equity, spread_points=spread)
+    return validate_order(request, equity=account_equity_usd(), spread_points=spread)
 
 
 @app.post("/api/orders/execute", response_model=ExecuteOrderResponse)
@@ -554,7 +589,7 @@ def execute_order(request: ExecuteOrderRequest):
     if not request.confirmed:
         raise HTTPException(status_code=400, detail="Order confirmation is required before execution.")
     _, _, spread = bridge.tick(request.symbol)
-    validation = validate_order(request, equity=bridge.status().equity, spread_points=spread)
+    validation = validate_order(request, equity=account_equity_usd(), spread_points=spread)
     if not validation.valid:
         add_history(request.symbol, request.timeframe, 0, f"{request.orderType.value}", "blocked")
         return ExecuteOrderResponse(
@@ -762,11 +797,12 @@ def build_auto_status(exposure: RiskExposure | None = None) -> AutoModeStatus:
         exposure = build_risk_exposure(
             bridge.open_positions(),
             bridge.pending_orders(),
-            equity=account.equity,
+            equity=account_equity_usd(account),
             max_total_risk_percent=auto_config.maxTotalRiskPercent,
         )
     return AutoModeStatus(
         enabled=auto_config.enabled,
+        accountMode=auto_config.accountMode,
         activeSymbols=list(active_scan_symbols()),
         hardTakeProfitUsd=auto_config.hardTakeProfitUsd,
         recoveryEnabled=auto_config.recoveryEnabled,
@@ -1043,20 +1079,23 @@ def process_recovery_engine() -> RecoveryEngineStatus:
                 or cycle.realizedHedgeProfit != 0
             )
 
-            if active_cycle and cycle.basketProfit >= auto_config.basketTargetUsd[symbol]:
+            basket_target = broker_money_from_usd(auto_config.basketTargetUsd[symbol])
+            basket_max_loss = broker_money_from_usd(auto_config.basketMaxLossUsd[symbol])
+            hedge_target = broker_money_from_usd(auto_config.hedgeProfitUsd[symbol])
+            if active_cycle and cycle.basketProfit >= basket_target:
                 closed, failed, _profit = close_recovery_positions(
                     symbol_positions,
-                    f"Recovery basket target reached at ${cycle.basketProfit:.2f}.",
+                    f"Recovery basket target reached at {format_account_money(cycle.basketProfit)}.",
                 )
                 if failed == 0:
                     cycle.phase = "BASKET_EXIT"
                 set_recovery_action(cycle, f"Basket target exit: {closed} closed, {failed} failed.", now)
                 state_changed = True
                 continue
-            if active_cycle and cycle.basketProfit <= -auto_config.basketMaxLossUsd[symbol]:
+            if active_cycle and cycle.basketProfit <= -basket_max_loss:
                 closed, failed, _profit = close_recovery_positions(
                     symbol_positions,
-                    f"Recovery emergency loss cap reached at ${cycle.basketProfit:.2f}.",
+                    f"Recovery emergency loss cap reached at {format_account_money(cycle.basketProfit)}.",
                 )
                 if failed == 0:
                     cycle.phase = "EMERGENCY_EXIT"
@@ -1067,16 +1106,20 @@ def process_recovery_engine() -> RecoveryEngineStatus:
             if hedge_positions:
                 cycle.phase = "HEDGE_ACTIVE"
                 hedge_profit = round(sum(position.profit for position in hedge_positions), 2)
-                if hedge_profit >= auto_config.hedgeProfitUsd[symbol]:
+                if hedge_profit >= hedge_target:
                     closed, failed, realized = close_recovery_positions(
                         hedge_positions,
-                        f"Partial hedge target reached at ${hedge_profit:.2f}.",
+                        f"Partial hedge target reached at {format_account_money(hedge_profit)}.",
                     )
                     cycle.realizedHedgeProfit = round(cycle.realizedHedgeProfit + realized, 2)
                     if failed == 0:
                         cycle.phase = "WAIT_RECOVERY"
                         cycle.hedgeTickets = []
-                    set_recovery_action(cycle, f"Hedge target: {closed} closed, {failed} failed, ${realized:.2f} realized.", now)
+                    set_recovery_action(
+                        cycle,
+                        f"Hedge target: {closed} closed, {failed} failed, {format_account_money(realized)} realized.",
+                        now,
+                    )
                     state_changed = True
                 continue
 
@@ -1098,7 +1141,7 @@ def process_recovery_engine() -> RecoveryEngineStatus:
                     m15_candles,
                     f"{RECOVERY_COMMENT_PREFIX}{next_layer}-{symbol}",
                     all_positions,
-                    account.equity,
+                    account_equity_usd(account),
                 )
                 if accepted:
                     cycle.phase = "RECOVERY_ACTIVE"
@@ -1125,7 +1168,7 @@ def process_recovery_engine() -> RecoveryEngineStatus:
                     m15_candles,
                     f"{HEDGE_COMMENT_PREFIX}{symbol}",
                     all_positions,
-                    account.equity,
+                    account_equity_usd(account),
                 )
                 if accepted:
                     cycle.phase = "HEDGE_ACTIVE"
@@ -1223,7 +1266,8 @@ def process_trailing_positions() -> list[ClosePositionResult]:
         if is_recovery_engine_position(position) or symbol_has_active_recovery_cycle(position.symbol):
             continue
         hard_tp_usd = auto_config.hardTakeProfitUsd.get(position.symbol, AUTO_TAKE_PROFIT_USD)
-        if position.profit >= hard_tp_usd:
+        hard_tp_broker = broker_money_from_usd(hard_tp_usd)
+        if position.profit >= hard_tp_broker:
             last_attempt = hard_tp_last_attempts.get(position.ticket)
             if last_attempt is not None and now - last_attempt < timedelta(seconds=3):
                 continue
@@ -1241,14 +1285,18 @@ def process_trailing_positions() -> list[ClosePositionResult]:
                 record_hard_take_profit(ticket, closed_position, hard_tp_usd)
                 auto_last_action = (
                     f"Hard TP closed {closed_position.symbol} ticket {ticket} "
-                    f"at ${closed_position.profit:.2f} floating profit"
+                    f"at {format_account_money(closed_position.profit)} floating profit"
                 )
             continue
         if position.stopLoss is None:
             continue
-        config = TRAILING_CONFIG.get(position.symbol)
-        if config is None:
+        base_config = TRAILING_CONFIG.get(position.symbol)
+        if base_config is None:
             continue
+        config = {
+            **base_config,
+            "trigger_usd": broker_money_from_usd(base_config["trigger_usd"]),
+        }
         state = get_or_create_trailing_state(position)
         last_attempt = trailing_last_attempts.get(position.ticket)
         if last_attempt is not None and now - last_attempt < timedelta(seconds=3):
@@ -1382,7 +1430,7 @@ def run_auto_scan() -> AutoScanResponse:
     exposure = build_risk_exposure(
         bridge.open_positions(),
         bridge.pending_orders(),
-        equity=account.equity,
+        equity=account_equity_usd(account),
         max_total_risk_percent=auto_config.maxTotalRiskPercent,
     )
     blocked: list[str] = []
@@ -1435,7 +1483,7 @@ def run_auto_scan() -> AutoScanResponse:
                     riskMode=auto_config.riskMode,
                     riskValue=auto_config.riskValue,
                 ),
-                equity=account.equity,
+                equity=account_equity_usd(account),
                 spread_points=snapshot.spread_points,
             )
             if not validation.valid or validation.lot is None:
@@ -1462,7 +1510,7 @@ def run_auto_scan() -> AutoScanResponse:
         candidate_exposure = build_risk_exposure(
             current_positions,
             current_pending,
-            equity=account.equity,
+            equity=account_equity_usd(account),
             max_total_risk_percent=auto_config.maxTotalRiskPercent,
             candidate=candidate_item,
         )
@@ -1510,7 +1558,7 @@ def run_auto_scan() -> AutoScanResponse:
     final_exposure = build_risk_exposure(
         bridge.open_positions(),
         bridge.pending_orders(),
-        equity=account.equity,
+        equity=account_equity_usd(account),
         max_total_risk_percent=auto_config.maxTotalRiskPercent,
     )
     return AutoScanResponse(

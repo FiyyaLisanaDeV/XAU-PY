@@ -12,7 +12,24 @@ This page lists the main user-facing and backend features in the XAU-PY trading 
 | Daily Target | Shows progress toward a 10% daily account target |
 | Open Positions | Count of open positions, split into winning and losing |
 | Profit Factor | Gross winning P/L divided by gross losing P/L |
-| Pair Performance | Winning/losing count and nominal USD per pair |
+| Pair Performance | Winning/losing count and nominal account unit per pair |
+
+## USD And USC Account Modes
+
+The Settings page supports:
+
+| Mode | Conversion | Use |
+| --- | --- | --- |
+| `USD` | `1 account unit = 1 USD` | standard account |
+| `USC` | `100 USC = 1 USD` | Exness cent account |
+
+In USC mode:
+
+- Balance, equity, floating P/L, realized P/L, and journal values display as USC.
+- Hard TP `$10` is compared to `1,000 USC`.
+- Hedge and basket USD targets are multiplied by `100` before comparison.
+- Broker equity is divided by `100` before percent-equity and total-risk calculations.
+- Account mode cannot change during an active hedge/recovery basket.
 
 ## Position Controls
 

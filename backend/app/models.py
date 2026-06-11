@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 Symbol = Literal["XAUUSD", "EURUSD"]
 Timeframe = Literal["M15", "M30", "H1", "H4", "D1"]
+AccountMode = Literal["USD", "USC"]
 
 
 class Side(str, Enum):
@@ -399,6 +400,7 @@ class SignalLogEntry(BaseModel):
 
 class AutoModeRequest(BaseModel):
     enabled: bool
+    accountMode: AccountMode = "USD"
     activeSymbols: list[Symbol] = Field(default_factory=lambda: ["XAUUSD", "EURUSD"])
     hardTakeProfitUsd: dict[Symbol, Annotated[float, Field(gt=0)]] = Field(default_factory=lambda: {"XAUUSD": 10.0, "EURUSD": 10.0})
     recoveryEnabled: bool = False
@@ -433,6 +435,7 @@ class AutoExecutionItem(BaseModel):
 
 class AutoModeStatus(BaseModel):
     enabled: bool = False
+    accountMode: AccountMode = "USD"
     activeSymbols: list[Symbol] = Field(default_factory=lambda: ["XAUUSD", "EURUSD"])
     hardTakeProfitUsd: dict[Symbol, Annotated[float, Field(gt=0)]] = Field(default_factory=lambda: {"XAUUSD": 10.0, "EURUSD": 10.0})
     recoveryEnabled: bool = False

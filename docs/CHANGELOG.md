@@ -4,6 +4,9 @@
 
 ### Added
 
+- Added manual `USD / USC` account mode with `100 USC = 1 USD`.
+- Added USC-aware hard TP, trailing trigger, hedge target, basket target, emergency loss cap, and equity-risk conversion.
+- Added USC labels across account summary, pair performance, and open-position P/L.
 - Added optional bounded martingale hedge recovery, disabled by default.
 - Added completed-candle M15/M30 reversal scoring and original-direction recovery confirmation.
 - Added persisted recovery phases: `NORMAL`, `HEDGE_ACTIVE`, `WAIT_RECOVERY`, `RECOVERY_ACTIVE`, `BASKET_EXIT`, and `EMERGENCY_EXIT`.

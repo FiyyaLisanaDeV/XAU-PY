@@ -20,6 +20,7 @@ import "./styles.css";
 type SymbolName = "XAUUSD" | "EURUSD";
 type Timeframe = "M15" | "M30" | "H1" | "H4" | "D1";
 type RiskMode = "fixed_lot" | "fixed_usd" | "percent_equity";
+type AccountMode = "USD" | "USC";
 type IndicatorKey = "ema" | "ma" | "supportResistance" | "supplyDemand" | "fib" | "live";
 
 interface Candle {
@@ -206,6 +207,7 @@ interface RiskExposure {
 
 interface AutoModeStatus {
   enabled: boolean;
+  accountMode: AccountMode;
   activeSymbols: SymbolName[];
   hardTakeProfitUsd: Record<SymbolName, number>;
   recoveryEnabled: boolean;
@@ -323,6 +325,7 @@ interface ConfluenceScoreCard {
 
 interface StrategyRiskSettings {
   enabled: boolean;
+  accountMode: AccountMode;
   activeSymbols: SymbolName[];
   xauusdHardTpUsd: string;
   eurusdHardTpUsd: string;
@@ -491,6 +494,7 @@ const SCORE_BLOCK_REASON = "Confluence score below 60";
 const INVESTING_AUTO_SYNC_SECONDS = 60;
 const defaultStrategyRiskSettings: StrategyRiskSettings = {
   enabled: true,
+  accountMode: "USD",
   activeSymbols: ["XAUUSD", "EURUSD"],
   xauusdHardTpUsd: "10",
   eurusdHardTpUsd: "10",
@@ -519,6 +523,7 @@ const defaultStrategyRiskSettings: StrategyRiskSettings = {
 function strategySettingsFromAutoMode(autoMode: AutoModeStatus): StrategyRiskSettings {
   return {
     enabled: autoMode.enabled,
+    accountMode: autoMode.accountMode ?? "USD",
     activeSymbols: autoMode.activeSymbols ?? ["XAUUSD", "EURUSD"],
     xauusdHardTpUsd: String(autoMode.hardTakeProfitUsd?.XAUUSD ?? 10),
     eurusdHardTpUsd: String(autoMode.hardTakeProfitUsd?.EURUSD ?? 10),
@@ -635,6 +640,7 @@ function App() {
     setStrategySettings(strategySettingsFromAutoMode(autoMode));
   }, [autoMode, settingsDirty]);
 
+  const accountMode = autoMode?.accountMode ?? "USD";
   const summary = React.useMemo(() => buildSummary(status, positions, journal), [status, positions, journal]);
   const pairRows = React.useMemo(() => buildPairRows(journal), [journal]);
   const dailyTarget = (status?.balance ?? status?.equity ?? 0) * 0.1;
@@ -643,7 +649,7 @@ function App() {
   async function closePositionGroup(kind: "winning" | "losing") {
     const selected = positions.filter((position) => (
       kind === "winning"
-        ? position.profit >= (autoMode?.hardTakeProfitUsd?.[position.symbol] ?? 10)
+        ? position.profit >= usdToAccountMoney(autoMode?.hardTakeProfitUsd?.[position.symbol] ?? 10, accountMode)
         : position.profit < 0
     ));
     if (selected.length === 0) {
@@ -651,7 +657,7 @@ function App() {
       return;
     }
     const total = selected.reduce((sum, position) => sum + position.profit, 0);
-    if (!window.confirm(`Close ${selected.length} ${kind} trade dengan floating P/L ${formatMoney(total)}?`)) return;
+    if (!window.confirm(`Close ${selected.length} ${kind} trade dengan floating P/L ${formatAccountMoney(total, accountMode)}?`)) return;
     let closed = 0;
     for (const position of selected) {
       const response = await fetchJson<ClosePositionResponse>(`${API_BASE}/api/positions/close`, {
@@ -710,6 +716,7 @@ function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         enabled: nextSettings.enabled,
+        accountMode: nextSettings.accountMode,
         activeSymbols: nextSettings.activeSymbols.length > 0 ? nextSettings.activeSymbols : ["XAUUSD", "EURUSD"],
         hardTakeProfitUsd: {
           XAUUSD: positiveNumber(nextSettings.xauusdHardTpUsd, 10),
@@ -833,6 +840,12 @@ function App() {
           <small>Active {formatActiveSymbols(autoMode?.activeSymbols)}</small>
         </div>
         <div className="quote-card">
+          <span>Account Mode</span>
+          <strong>{accountMode}</strong>
+          <small>{accountMode === "USC" ? "100 USC = 1 USD" : "Standard dollar account"}</small>
+          <small>Broker: {status?.currency ?? "--"}</small>
+        </div>
+        <div className="quote-card">
           <span>Auto Trailing</span>
           <strong>{autoTrailing?.activeTickets ?? 0}/{autoTrailing?.trackedTickets ?? 0}</strong>
           <small>Always ON - checks every {formatSeconds(autoTrailing?.monitorIntervalSeconds ?? 1)}</small>
@@ -872,20 +885,20 @@ function App() {
       </section>
 
       <section className="summary-grid">
-        <SummaryMetric title="P/L Total" value={formatMoney(summary.totalPnl)} tone={summary.totalPnl >= 0 ? "positive" : "negative"} />
-        <SummaryMetric title="P/L Daily" value={formatMoney(summary.dailyPnl)} tone={summary.dailyPnl >= 0 ? "positive" : "negative"} />
-        <SummaryMetric title="Current Position P/L" value={formatMoney(summary.floatingPnl)} tone={summary.floatingPnl >= 0 ? "positive" : "negative"} detail="Floating open positions" />
-        <SummaryMetric title="Daily Target" value={formatMoney(summary.dailyPnl)} detail={`${dailyProgress.toFixed(1)}% dari target 10% (${formatMoney(dailyTarget)})`} tone={summary.dailyPnl >= 0 ? "positive" : "negative"} />
+        <SummaryMetric title="P/L Total" value={formatAccountMoney(summary.totalPnl, accountMode)} tone={summary.totalPnl >= 0 ? "positive" : "negative"} />
+        <SummaryMetric title="P/L Daily" value={formatAccountMoney(summary.dailyPnl, accountMode)} tone={summary.dailyPnl >= 0 ? "positive" : "negative"} />
+        <SummaryMetric title="Current Position P/L" value={formatAccountMoney(summary.floatingPnl, accountMode)} tone={summary.floatingPnl >= 0 ? "positive" : "negative"} detail="Floating open positions" />
+        <SummaryMetric title="Daily Target" value={formatAccountMoney(summary.dailyPnl, accountMode)} detail={`${dailyProgress.toFixed(1)}% dari target 10% (${formatAccountMoney(dailyTarget, accountMode)})`} tone={summary.dailyPnl >= 0 ? "positive" : "negative"} />
         <SummaryMetric title="Open Positions" value={`${positions.length}`} detail={`${summary.winningOpenCount} win / ${summary.losingOpenCount} loss`} />
-        <SummaryMetric title="Profit Factor" value={summary.profitFactorLabel} detail={`${formatMoney(summary.grossProfit)} win / ${formatMoney(summary.grossLoss)} loss`} />
-        <SummaryMetric title="Equity" value={formatMoney(status?.equity ?? 0)} detail={`Balance ${formatMoney(status?.balance ?? 0)}`} />
+        <SummaryMetric title="Profit Factor" value={summary.profitFactorLabel} detail={`${formatAccountMoney(summary.grossProfit, accountMode)} win / ${formatAccountMoney(summary.grossLoss, accountMode)} loss`} />
+        <SummaryMetric title="Equity" value={formatAccountMoney(status?.equity ?? 0, accountMode)} detail={`Balance ${formatAccountMoney(status?.balance ?? 0, accountMode)}`} />
       </section>
 
       <section className="target-card">
         <div>
           <span className="panel-title">Daily target achieved</span>
-          <strong>{formatMoney(summary.dailyPnl)}</strong>
-          <small>Target 10%: {formatMoney(dailyTarget)} - {dailyProgress.toFixed(1)}% reached</small>
+          <strong>{formatAccountMoney(summary.dailyPnl, accountMode)}</strong>
+          <small>Target 10%: {formatAccountMoney(dailyTarget, accountMode)} - {dailyProgress.toFixed(1)}% reached</small>
         </div>
         <div className="target-track">
           <span style={{ width: `${dailyProgress}%` }} />
@@ -908,17 +921,17 @@ function App() {
             <span className="panel-title">Pair performance</span>
             <h2>Winning and losing trades by pair</h2>
           </div>
-          <small>Closed trade journal, nominal USD.</small>
+          <small>Closed trade journal, nominal {accountMode}.</small>
         </div>
         <table className="summary-table">
           <thead>
             <tr>
               <th>Pair</th>
               <th>Winning trades</th>
-              <th>Winning $</th>
+              <th>Winning {accountMode}</th>
               <th>Losing trades</th>
-              <th>Losing $</th>
-              <th>Net $</th>
+              <th>Losing {accountMode}</th>
+              <th>Net {accountMode}</th>
             </tr>
           </thead>
           <tbody>
@@ -926,10 +939,10 @@ function App() {
               <tr key={row.symbol}>
                 <td>{row.symbol}</td>
                 <td>{row.wins}</td>
-                <td className="profit-text">{formatMoney(row.winUsd)}</td>
+                <td className="profit-text">{formatAccountMoney(row.winUsd, accountMode)}</td>
                 <td>{row.losses}</td>
-                <td className="loss-text">{formatMoney(row.lossUsd)}</td>
-                <td className={row.netUsd >= 0 ? "profit-text" : "loss-text"}>{formatMoney(row.netUsd)}</td>
+                <td className="loss-text">{formatAccountMoney(row.lossUsd, accountMode)}</td>
+                <td className={row.netUsd >= 0 ? "profit-text" : "loss-text"}>{formatAccountMoney(row.netUsd, accountMode)}</td>
               </tr>
             ))}
           </tbody>
@@ -942,7 +955,7 @@ function App() {
             <span className="panel-title">Open positions</span>
             <h2>Current floating P/L</h2>
           </div>
-          <small>Hard TP closes at floating profit $10; trailing remains available as a secondary/manual control.</small>
+          <small>Hard TP uses USD targets; in USC mode $10 equals 1,000 USC.</small>
         </div>
         <table className="summary-table">
           <thead>
@@ -965,7 +978,7 @@ function App() {
                 <td>{position.volume.toFixed(2)}</td>
                 <td>{formatPrice(position.open_price)}</td>
                 <td>{formatPrice(position.current_price)}</td>
-                <td className={position.profit >= 0 ? "profit-text" : "loss-text"}>{formatMoney(position.profit)}</td>
+                <td className={position.profit >= 0 ? "profit-text" : "loss-text"}>{formatAccountMoney(position.profit, accountMode)}</td>
               </tr>
             )) : (
               <tr>
@@ -1290,6 +1303,14 @@ function StrategySettingsPage({
             <span>{formatPercent(exposure?.totalRiskPercent)} used</span>
           </div>
           <label className="settings-field">
+            <span>Account money mode</span>
+            <select value={settings.accountMode} onChange={(event) => onChange({ accountMode: event.target.value as AccountMode })}>
+              <option value="USD">USD - standard account</option>
+              <option value="USC">USC - cent account</option>
+            </select>
+            <small>{settings.accountMode === "USC" ? "100 USC = 1 USD. Broker P/L targets are multiplied by 100." : "1 account unit = 1 USD."}</small>
+          </label>
+          <label className="settings-field">
             <span>Risk mode</span>
             <select value={settings.riskMode} onChange={(event) => onChange({ riskMode: event.target.value as RiskMode })}>
               <option value="percent_equity">Percent equity</option>
@@ -1302,7 +1323,7 @@ function StrategySettingsPage({
           <div className="settings-risk-preview">
             <Metric label="Total risk" value={`${formatPercent(exposure?.totalRiskPercent)} / ${formatPercent(autoMode?.maxTotalRiskPercent ?? 20)}`} />
             <Metric label="Available" value={formatPercent(exposure?.availableRiskPercent)} />
-            <Metric label="Open risk items" value={`${exposure?.items?.length ?? 0}`} />
+            <Metric label="Account mode" value={settings.accountMode} />
           </div>
         </section>
 
@@ -1385,6 +1406,7 @@ function StrategySettingsPage({
             <span>M15, M30, H1 = execution timeframe</span>
             <span>H4, D1 = monitor/context only</span>
             <span>Lot max per position tetap 0.10</span>
+            <span>Account mode: {settings.accountMode} ({settings.accountMode === "USC" ? "100 USC = 1 USD" : "standard USD"})</span>
             <span>Recovery: {settings.recoveryEnabled ? "ON" : "OFF"}, hedge {clampNumber(settings.hedgeRatioPercent, 10, 70, 50).toFixed(0)}%, max {Math.round(clampNumber(settings.maxRecoveryLayers, 0, 2, 2))} layer</span>
             <span>Basket exit menghitung P/L main + hedge + recovery per pair</span>
             <span>XAUUSD Hard TP: {formatMoney(positiveNumber(settings.xauusdHardTpUsd, 10))}</span>
@@ -1739,6 +1761,7 @@ function LegacyApp() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         enabled,
+        accountMode: autoMode?.accountMode ?? "USD",
         activeSymbols: autoMode?.activeSymbols ?? ["XAUUSD", "EURUSD"],
         hardTakeProfitUsd: autoMode?.hardTakeProfitUsd ?? { XAUUSD: 10, EURUSD: 10 },
         recoveryEnabled: autoMode?.recoveryEnabled ?? false,
@@ -2975,6 +2998,17 @@ function formatPrice(value: number | null | undefined) {
 
 function formatMoney(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(value);
+}
+
+function usdToAccountMoney(valueUsd: number, accountMode: AccountMode) {
+  return accountMode === "USC" ? valueUsd * 100 : valueUsd;
+}
+
+function formatAccountMoney(value: number, accountMode: AccountMode) {
+  if (accountMode === "USC") {
+    return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value)} USC`;
+  }
+  return formatMoney(value);
 }
 
 function positiveNumber(value: string | number, fallback: number) {

@@ -29,6 +29,7 @@ Local FastAPI + React dashboard for `XAUUSD` and `EURUSD` trading workflow with 
 | Hard TP | configurable per pair, default `XAUUSD $10` and `EURUSD $10` |
 | Hedge recovery | configurable, default `OFF` |
 | Recovery layers | maximum `2`, multiplier maximum `1.50x` |
+| Account money mode | `USD` or `USC`; `100 USC = 1 USD` |
 | Investing auto sync | every `60 seconds` |
 | Restart all services | frontend button starts `5174` if needed and restarts backend `9000` |
 
@@ -117,6 +118,8 @@ EA backend URL:
 ```text
 http://127.0.0.1:9000/api/ea/status
 ```
+
+For an Exness cent account, select `USC - cent account` in Settings. Balance, equity, P/L, and journal values remain displayed in USC, while USD strategy targets and equity-based risk are converted using `100 USC = 1 USD`.
 
 ## Main API Endpoints
 

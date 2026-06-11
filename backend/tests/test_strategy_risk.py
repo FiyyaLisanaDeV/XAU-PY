@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import pytest
+
 import backend.app.mt5_bridge as mt5_bridge_module
 import backend.app.main as main_module
 from backend.app.investing_sync import INVESTING_PIVOT_URLS, parse_pivot_html, parse_technical_html
@@ -7,6 +9,11 @@ from backend.app.models import ExecuteOrderRequest, OpenPosition, OrderRecommend
 from backend.app.mt5_bridge import MT5Bridge
 from backend.app.risk import build_risk_exposure, validate_order
 from backend.app.strategy import build_snapshot, recommend
+
+
+@pytest.fixture(autouse=True)
+def default_test_account_mode(monkeypatch):
+    monkeypatch.setattr(main_module.auto_config, "accountMode", "USD")
 
 
 def test_risk_validation_blocks_more_than_half_percent():
@@ -317,6 +324,56 @@ def test_hard_take_profit_closes_at_ten_dollars(monkeypatch):
     assert fake_bridge.closed == [11]
     assert main_module.journal[-1].closeReason == "tp"
     assert "Hard take profit" in main_module.journal[-1].note
+
+
+def test_usc_mode_converts_ten_usd_hard_tp_to_one_thousand_usc(monkeypatch):
+    below_target = OpenPosition(
+        ticket=111,
+        symbol="XAUUSD",
+        broker_symbol="XAUUSDm",
+        side=Side.BUY,
+        volume=0.01,
+        open_price=2350.0,
+        current_price=2360.0,
+        stopLoss=None,
+        takeProfit=2370.0,
+        profit=999.99,
+        swap=0.0,
+        commission=0.0,
+        opened_at="2026-06-11T00:00:00+00:00",
+        comment=None,
+    )
+    at_target = below_target.model_copy(update={"ticket": 112, "profit": 1000.0})
+
+    class FakeBridge:
+        def __init__(self):
+            self.positions = [below_target]
+            self.closed: list[int] = []
+
+        def open_positions(self):
+            return self.positions
+
+        def close_position(self, ticket=None, symbol=None):
+            self.closed.append(ticket)
+            return True, ticket, "closed", at_target
+
+    fake_bridge = FakeBridge()
+    monkeypatch.setattr(main_module, "bridge", fake_bridge)
+    monkeypatch.setattr(main_module.auto_config, "accountMode", "USC")
+    monkeypatch.setattr(main_module.auto_config, "hardTakeProfitUsd", {"XAUUSD": 10.0, "EURUSD": 10.0})
+    monkeypatch.setattr(main_module, "recovery_cycles", {})
+    main_module.trailing_states.clear()
+    main_module.trailing_last_attempts.clear()
+    main_module.hard_tp_last_attempts.clear()
+
+    assert main_module.process_trailing_positions() == []
+    fake_bridge.positions = [at_target]
+    results = main_module.process_trailing_positions()
+
+    assert [item.ticket for item in results] == [112]
+    assert fake_bridge.closed == [112]
+    assert main_module.broker_money_from_usd(10.0) == 1000.0
+    assert main_module.usd_from_broker_money(98631.1) == 986.311
 
 
 def test_auto_trailing_sell_uses_ask_peak_and_original_sl_guard(monkeypatch):

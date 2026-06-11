@@ -49,6 +49,7 @@ def range_candles(count: int = 70) -> list[Candle]:
 def configure_recovery(monkeypatch) -> None:
     monkeypatch.setattr(main_module, "recovery_cycles", {})
     monkeypatch.setattr(main_module.auto_config, "enabled", True)
+    monkeypatch.setattr(main_module.auto_config, "accountMode", "USD")
     monkeypatch.setattr(main_module.auto_config, "recoveryEnabled", True)
     monkeypatch.setattr(main_module.auto_config, "activeSymbols", ["XAUUSD"])
     monkeypatch.setattr(main_module.auto_config, "reversalHedgeScore", 75)

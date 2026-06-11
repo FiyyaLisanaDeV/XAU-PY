@@ -91,6 +91,15 @@ risk_usd = abs(entry - stopLoss) * contract_size * lot
 risk_percent = risk_usd / equity * 100
 ```
 
+For `USC` mode, MT5 equity is normalized first:
+
+```text
+equity_usd = equity_usc / 100
+target_usc = target_usd * 100
+```
+
+This keeps `0.5%` risk equivalent between standard and cent accounts while preserving USC values in the dashboard.
+
 Contract sizes:
 
 | Pair | Contract size |
