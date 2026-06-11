@@ -18,10 +18,10 @@ This page lists the main user-facing and backend features in the XAU-PY trading 
 
 | Control | Behavior |
 | --- | --- |
-| Close all winning trades | Closes currently open positions with floating profit above zero |
+| Close winning trades | Closes currently open positions with floating profit `>= $10` |
 | Close all losing trades | Closes currently open positions with floating profit below zero |
 | Close all open trades | Closes every open position after confirmation |
-| Auto trailing | Backend starts trailing SL when floating profit reaches `>= $10` |
+| Hard TP | Backend sends a market close as soon as floating profit reaches `>= $10` |
 | Auto trailing status | Shows tracked tickets, active trailing tickets, and XAUUSD/EURUSD trailing rules |
 | Reset all data | Resets local dashboard baseline without deleting broker history or closing positions |
 | Restart all services | Restarts backend and starts frontend on `5174` if it is not running |
@@ -95,7 +95,7 @@ The Investing page shows one section per pair.
 
 | Monitor | Interval | Behavior |
 | --- | --- | --- |
-| Auto trailing monitor | `1 second` | moves SL after floating profit reaches `>= $10` |
+| Position profit monitor | `1 second` | closes at hard TP `$10`; trailing remains secondary |
 | Full Auto strategy monitor | configurable, default `15 seconds` | scans and executes if valid |
 | Investing sync monitor | `60 seconds` | refreshes Investing technical data for all active source symbols |
 

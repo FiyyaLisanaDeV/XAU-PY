@@ -551,7 +551,7 @@ function App() {
   const dailyProgress = dailyTarget > 0 ? Math.min(Math.max((summary.dailyPnl / dailyTarget) * 100, 0), 100) : 0;
 
   async function closePositionGroup(kind: "winning" | "losing") {
-    const selected = positions.filter((position) => (kind === "winning" ? position.profit > 0 : position.profit < 0));
+    const selected = positions.filter((position) => (kind === "winning" ? position.profit >= 10 : position.profit < 0));
     if (selected.length === 0) {
       setToast(`Tidak ada ${kind} trade terbuka.`);
       return;
@@ -790,7 +790,7 @@ function App() {
         <button className={autoMode?.enabled ? "auto-toggle on" : "auto-toggle off"} onClick={() => toggleAutoMode(!(autoMode?.enabled ?? false))}>
           Full Auto {autoMode?.enabled ? "ON" : "OFF"}
         </button>
-        <button className="close-win" onClick={() => closePositionGroup("winning")}>Close all winning trades</button>
+        <button className="close-win" onClick={() => closePositionGroup("winning")}>Close winning trades &gt;= $10</button>
         <button className="close-loss" onClick={() => closePositionGroup("losing")}>Close all losing trades</button>
         <button className="close-all" onClick={closeAllPositions}>Close all open trades</button>
         <button className="reset-data" onClick={resetAllData}>Reset all data</button>
@@ -836,7 +836,7 @@ function App() {
             <span className="panel-title">Open positions</span>
             <h2>Current floating P/L</h2>
           </div>
-          <small>{autoTrailing?.message ?? "Auto trailing activates when floating profit reaches $10."}</small>
+          <small>Hard TP closes at floating profit $10; trailing remains available as a secondary/manual control.</small>
         </div>
         <table className="summary-table">
           <thead>
@@ -1209,7 +1209,7 @@ function StrategySettingsPage({
             <span>M15, M30, H1 = execution timeframe</span>
             <span>H4, D1 = monitor/context only</span>
             <span>Lot max per position tetap 0.10</span>
-            <span>Auto trailing aktif saat floating profit {">="} $10</span>
+            <span>Hard TP menutup posisi saat floating profit {">="} $10</span>
             <span>Pair aktif auto-entry: {formatActiveSymbols(settings.activeSymbols)}</span>
           </div>
         </section>
@@ -2412,7 +2412,7 @@ function PositionCard({
         <div>
           <span className="panel-title">Position</span>
           <h2>Open position monitor</h2>
-          <small>Auto trailing starts once floating profit reaches $10; SL then follows peak price.</small>
+          <small>Hard TP closes at $10 floating profit. Manual trailing remains available below.</small>
         </div>
         <div className={`position-pnl ${totalProfit >= 0 ? "positive" : "negative"}`}>
           <span>Floating P/L</span>

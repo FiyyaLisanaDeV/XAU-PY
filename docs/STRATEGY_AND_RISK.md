@@ -156,19 +156,18 @@ Full Auto executes only when all of these are true:
 12. Total exposure after the candidate stays within `20%`.
 13. Duplicate cooldown has not blocked the setup.
 
-## Auto Trailing
+## Hard TP And Trailing
 
-Auto trailing is separate from the strategy signal.
+Hard TP is separate from the strategy signal and takes priority over trailing.
 
 Behavior:
 
 ```text
 if open position floating profit >= $10:
-    backend activates trailing state for that ticket
-    backend moves SL behind peak price when step distance is reached
+    backend sends an immediate market close request
 ```
 
-The monitor runs every second while the backend is alive. It does not depend on frontend refresh and it does not require Full Auto to be enabled.
+The monitor runs every second while the backend is alive. It does not depend on frontend refresh and it does not require Full Auto to be enabled. Because market execution can slip during fast movement, the recorded result may differ slightly from exactly `$10`, but the app no longer intentionally trails a position back below the target.
 
 Default trailing config:
 

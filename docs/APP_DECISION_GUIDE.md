@@ -167,7 +167,7 @@ Alur Full Auto:
 10. Cek total risk setelah kandidat order.
 11. Kirim order ke MT5 jika semua valid.
 
-App otomatis mengaktifkan trailing stop ketika floating profit posisi mencapai minimal `$10`. Backend memonitor posisi setiap 1 detik selama service aktif, jadi trailing tidak bergantung pada refresh UI. Close all, close per ticket, manual trailing, dan force close tetap fitur terpisah.
+App otomatis mengirim market close ketika floating profit posisi mencapai minimal `$10`. Backend memonitor posisi setiap 1 detik selama service aktif. Manual trailing tetap tersedia sebagai fitur terpisah.
 
 ## 8. Validitas Posisi Terbuka
 
@@ -192,7 +192,7 @@ Status posisi:
 3. Setup posisi tidak valid
    - Ada sinyal valid berlawanan arah.
    - Contoh: posisi BUY terbuka, lalu M15/M30/H1 memberi sinyal SELL valid.
-   - App memberi alert. Auto trailing tetap hanya menggeser SL setelah profit `$10`, bukan menutup posisi langsung.
+   - App memberi alert. Hard TP `$10` tetap menutup posisi lebih dulu; validitas setup tidak melakukan auto-close tambahan.
 
 Alert ini membantu user melihat kapan alasan awal membuka posisi sudah melemah atau berubah. Keputusan close karena validitas setup tetap manual; auto close hanya aktif untuk posisi profit `>= $10`.
 

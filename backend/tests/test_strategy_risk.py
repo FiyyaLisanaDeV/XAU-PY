@@ -254,7 +254,7 @@ def test_investing_technical_parses_available_timeframe_tabs():
     assert technical["timeframe_signals"]["1d"]["signal"]["code"] == "sell"
 
 
-def test_auto_trailing_updates_stop_after_ten_dollars(monkeypatch):
+def test_hard_take_profit_closes_at_ten_dollars(monkeypatch):
     profitable = OpenPosition(
         ticket=11,
         symbol="XAUUSD",
@@ -290,32 +290,32 @@ def test_auto_trailing_updates_stop_after_ten_dollars(monkeypatch):
 
     class FakeBridge:
         def __init__(self):
-            self.modified: list[tuple[int, float, float | None]] = []
+            self.closed: list[int] = []
 
         def open_positions(self):
             return [profitable, quiet]
 
-        def tick(self, symbol):
-            return 2360.0, 2360.3, 30.0
+        def close_position(self, ticket=None, symbol=None):
+            self.closed.append(ticket)
+            return True, ticket, "closed", profitable
 
-        def modify_position_stop(self, ticket, stop_loss, take_profit=None):
-            self.modified.append((ticket, stop_loss, take_profit))
-            return True, "updated", profitable.stopLoss, round(stop_loss, 2)
+        def tick(self, symbol):
+            return 1.0997, 1.0998, 10.0
 
     fake_bridge = FakeBridge()
     monkeypatch.setattr(main_module, "bridge", fake_bridge)
     main_module.trailing_states.clear()
     main_module.trailing_last_attempts.clear()
+    main_module.hard_tp_last_attempts.clear()
     main_module.journal.clear()
     main_module.history.clear()
 
     results = main_module.process_trailing_positions()
 
     assert [item.ticket for item in results] == [11]
-    assert fake_bridge.modified == [(11, 2358.5, 2370.0)]
-    assert main_module.trailing_states[11].trailing_active
-    assert main_module.trailing_states[11].peak_price == 2360.0
-    assert not main_module.journal
+    assert fake_bridge.closed == [11]
+    assert main_module.journal[-1].closeReason == "tp"
+    assert "Hard take profit" in main_module.journal[-1].note
 
 
 def test_auto_trailing_sell_uses_ask_peak_and_original_sl_guard(monkeypatch):
@@ -352,6 +352,7 @@ def test_auto_trailing_sell_uses_ask_peak_and_original_sl_guard(monkeypatch):
 
     fake_bridge = FakeBridge()
     monkeypatch.setattr(main_module, "bridge", fake_bridge)
+    monkeypatch.setattr(main_module, "AUTO_TAKE_PROFIT_USD", 100.0)
     main_module.trailing_states.clear()
     main_module.trailing_last_attempts.clear()
 
@@ -383,7 +384,7 @@ def test_auto_trailing_skips_positions_without_stop_loss(monkeypatch):
         current_price=2360.0,
         stopLoss=None,
         takeProfit=2370.0,
-        profit=20.0,
+        profit=5.0,
         swap=0.0,
         commission=0.0,
         opened_at="2026-06-04T00:00:00+00:00",
@@ -437,6 +438,7 @@ def test_auto_trailing_rolls_back_state_when_modify_fails(monkeypatch):
             return False, "rejected", profitable.stopLoss, round(stop_loss, 2)
 
     monkeypatch.setattr(main_module, "bridge", FakeBridge())
+    monkeypatch.setattr(main_module, "AUTO_TAKE_PROFIT_USD", 100.0)
     main_module.trailing_states.clear()
     main_module.trailing_last_attempts.clear()
 

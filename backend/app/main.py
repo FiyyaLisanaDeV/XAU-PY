@@ -131,6 +131,7 @@ TRAILING_CONFIG: dict[Symbol, dict[str, float]] = {
 }
 trailing_states: dict[int, "TrailingState"] = {}
 trailing_last_attempts: dict[int, datetime] = {}
+hard_tp_last_attempts: dict[int, datetime] = {}
 trailing_monitor_task: asyncio.Task[None] | None = None
 auto_strategy_monitor_task: asyncio.Task[None] | None = None
 investing_sync_monitor_task: asyncio.Task[None] | None = None
@@ -330,6 +331,7 @@ def reset_data():
     auto_executed_signatures.clear()
     trailing_states.clear()
     trailing_last_attempts.clear()
+    hard_tp_last_attempts.clear()
     auto_last_scan = None
     auto_last_action = None
     auto_blocked_reason = None
@@ -719,6 +721,7 @@ def cleanup_trailing_states(open_tickets: set[int]) -> None:
     for ticket in closed_tickets:
         trailing_states.pop(ticket, None)
         trailing_last_attempts.pop(ticket, None)
+        hard_tp_last_attempts.pop(ticket, None)
 
 
 def get_or_create_trailing_state(position: OpenPosition) -> TrailingState:
@@ -787,6 +790,27 @@ def process_trailing_positions() -> list[ClosePositionResult]:
     positions = bridge.open_positions()
     cleanup_trailing_states({position.ticket for position in positions})
     for position in positions:
+        if position.profit >= AUTO_TAKE_PROFIT_USD:
+            last_attempt = hard_tp_last_attempts.get(position.ticket)
+            if last_attempt is not None and now - last_attempt < timedelta(seconds=3):
+                continue
+            hard_tp_last_attempts[position.ticket] = now
+            accepted, ticket, message, closed_position = bridge.close_position(ticket=position.ticket)
+            results.append(
+                ClosePositionResult(
+                    accepted=accepted,
+                    ticket=ticket or position.ticket,
+                    symbol=position.symbol,
+                    message=message,
+                )
+            )
+            if accepted and closed_position:
+                record_hard_take_profit(ticket, closed_position)
+                auto_last_action = (
+                    f"Hard TP closed {closed_position.symbol} ticket {ticket} "
+                    f"at ${closed_position.profit:.2f} floating profit"
+                )
+            continue
         if position.stopLoss is None:
             continue
         config = TRAILING_CONFIG.get(position.symbol)
@@ -818,6 +842,25 @@ def process_trailing_positions() -> list[ClosePositionResult]:
         else:
             state.current_sl = position.stopLoss
     return results
+
+
+def record_hard_take_profit(ticket: int | None, position: OpenPosition) -> None:
+    add_journal(
+        TradingJournalEntry(
+            time=datetime.now(timezone.utc).isoformat(),
+            ticket=ticket,
+            symbol=position.symbol,
+            side=position.side,
+            volume=position.volume,
+            entry=position.open_price,
+            exit=position.current_price,
+            profit=position.profit,
+            closeReason="tp",
+            source="app",
+            note=f"Hard take profit requested at floating profit >= ${AUTO_TAKE_PROFIT_USD:.2f}",
+        )
+    )
+    add_history(position.symbol, "H1", 0, "HARD_TP_10_USD", "closed")
 
 
 def build_auto_trailing_status() -> AutoTrailingStatus:
@@ -852,7 +895,10 @@ def build_auto_trailing_status() -> AutoTrailingStatus:
         activeTickets=active_tickets,
         rules=rules,
         states=states,
-        message=f"Auto trailing is always on; {active_tickets} active ticket(s), {len(states)} tracked.",
+        message=(
+            f"Hard TP $10 has priority; trailing tracks {len(states)} ticket(s), "
+            f"{active_tickets} active below the hard-close threshold."
+        ),
     )
 
 
