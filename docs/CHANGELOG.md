@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added a per-pair Daily Trade Limit switch; disabling it keeps the counter visible but removes only the daily-count entry block.
 - Added Simple and Advanced Settings modes, including Conservative, Opportunistic, High Risk, and Custom configuration classification.
 - Added backend-authoritative profile normalization so Simple-mode presets cannot drift from their documented risk and strategy limits.
 - Added an Indonesian `Penjelasan Setting` page with profile guidance, market-condition behavior, parameter definitions, and decision examples.

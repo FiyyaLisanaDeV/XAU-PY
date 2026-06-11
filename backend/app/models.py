@@ -340,6 +340,7 @@ class PairProfile(BaseModel):
     maxOppositeDirectionPositions: int = Field(default=2, ge=0, le=100)
     maxTotalLot: float = Field(default=0.50, ge=0, le=10)
     maxFloatingLossUsd: float = Field(default=0.0, ge=0)
+    dailyTradeLimitEnabled: bool = True
     maxDailyTrades: int = Field(default=20, ge=0, le=1000)
     maxHourlyTrades: int = Field(default=10, ge=0, le=1000)
     aggregateSlRiskCapPercent: float = Field(default=15.0, ge=1, le=30)

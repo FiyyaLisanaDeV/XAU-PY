@@ -118,7 +118,12 @@ def build_pair_exposure(
         reasons.append(f"{symbol} blocked: max opposite-direction positions reached")
     if profile.maxFloatingLossUsd > 0 and floating <= -profile.maxFloatingLossUsd:
         reasons.append(f"{symbol} blocked: floating loss limit reached")
-    if enforce_trade_limits and profile.maxDailyTrades > 0 and state.dailyTradeCount >= profile.maxDailyTrades:
+    if (
+        enforce_trade_limits
+        and profile.dailyTradeLimitEnabled
+        and profile.maxDailyTrades > 0
+        and state.dailyTradeCount >= profile.maxDailyTrades
+    ):
         reasons.append(f"{symbol} blocked: daily trade limit reached")
     if enforce_trade_limits and profile.maxHourlyTrades > 0 and state.hourlyTradeCount >= profile.maxHourlyTrades:
         reasons.append(f"{symbol} blocked: hourly trade limit reached")

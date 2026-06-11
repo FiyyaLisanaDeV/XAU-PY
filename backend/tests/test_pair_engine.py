@@ -143,3 +143,12 @@ def test_market_regime_returns_uncertain_when_history_is_short():
     result = classify_market_regime([candle(index) for index in range(10)], symbol="EURUSD", timeframe="M15")
     assert result.regime == "UNCERTAIN"
     assert result.confidence == 0
+
+
+def test_daily_trade_limit_can_be_disabled_without_resetting_counter():
+    profile = default_pair_profiles()["XAUUSD"]
+    profile.dailyTradeLimitEnabled = False
+    profile.maxDailyTrades = 5
+    state = PairState(symbol="XAUUSD", dailyTradeCount=99)
+    result = build_pair_exposure("XAUUSD", profile, state, [], [], 10000, 10000)
+    assert not any("daily trade limit" in reason for reason in result.reasons)

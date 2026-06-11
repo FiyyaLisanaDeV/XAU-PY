@@ -253,6 +253,7 @@ interface PairProfile {
   maxOppositeDirectionPositions: number;
   maxTotalLot: number;
   maxFloatingLossUsd: number;
+  dailyTradeLimitEnabled: boolean;
   maxDailyTrades: number;
   maxHourlyTrades: number;
   aggregateSlRiskCapPercent: number;
@@ -675,7 +676,7 @@ const defaultStrategyRiskSettings: StrategyRiskSettings = {
       lockAfterConsecutiveSl: 0, dailyLossLimitPercent: 0, newsFilterEnabled: false,
       loggingLevel: "normal", maxOpenPositions: 5, maxPendingOrders: 2,
       maxSameDirectionPositions: 3, maxOppositeDirectionPositions: 2, maxTotalLot: 0.5,
-      maxFloatingLossUsd: 0, maxDailyTrades: 20, maxHourlyTrades: 8,
+      maxFloatingLossUsd: 0, dailyTradeLimitEnabled: true, maxDailyTrades: 20, maxHourlyTrades: 8,
       aggregateSlRiskCapPercent: 15, closeOnly: false, trailingBreakEvenTriggerPips: 5,
       trailingBreakEvenLockPips: 1, trailingTriggerPips: 8, trailingDistancePips: 4,
       trailingStepPips: 2, minStopPips: 0, maxStopPips: 0
@@ -690,7 +691,7 @@ const defaultStrategyRiskSettings: StrategyRiskSettings = {
       lockAfterConsecutiveSl: 2, dailyLossLimitPercent: 1, newsFilterEnabled: true,
       loggingLevel: "verbose", maxOpenPositions: 1, maxPendingOrders: 0,
       maxSameDirectionPositions: 1, maxOppositeDirectionPositions: 0, maxTotalLot: 0.05,
-      maxFloatingLossUsd: 0, maxDailyTrades: 5, maxHourlyTrades: 2,
+      maxFloatingLossUsd: 0, dailyTradeLimitEnabled: true, maxDailyTrades: 5, maxHourlyTrades: 2,
       aggregateSlRiskCapPercent: 5, closeOnly: false, trailingBreakEvenTriggerPips: 5,
       trailingBreakEvenLockPips: 1, trailingTriggerPips: 8, trailingDistancePips: 4,
       trailingStepPips: 2, minStopPips: 10, maxStopPips: 30
@@ -2640,8 +2641,15 @@ function PairProfileCard({
 
       <div className="pair-profile-section">
         <div className="pair-profile-section-heading"><strong>Frequency & lock controls</strong><small>Mencegah overtrade dan loss streak.</small></div>
+        <label className="settings-switch compact">
+          <span>
+            <strong>Daily trade limit</strong>
+            <small>{profile.dailyTradeLimitEnabled ? `Entry diblokir setelah ${profile.maxDailyTrades} trade per hari.` : "Penghitung tetap berjalan, tetapi tidak memblokir entry."}</small>
+          </span>
+          <input type="checkbox" checked={profile.dailyTradeLimitEnabled} onChange={(event) => onChange({ dailyTradeLimitEnabled: event.target.checked })} />
+        </label>
         <div className="pair-profile-grid">
-          <CompactNumber label="Daily trades" value={profile.maxDailyTrades} min={0} max={100} step={1} suffix="max" onChange={(value) => onChange({ maxDailyTrades: value })} />
+          <CompactNumber label="Daily trades" value={profile.maxDailyTrades} min={1} max={100} step={1} suffix={profile.dailyTradeLimitEnabled ? "max" : "tracked"} onChange={(value) => onChange({ maxDailyTrades: value })} />
           <CompactNumber label="Hourly trades" value={profile.maxHourlyTrades} min={0} max={20} step={1} suffix="max" onChange={(value) => onChange({ maxHourlyTrades: value })} />
           <CompactNumber label="SL cooldown" value={profile.cooldownAfterSlMinutes} min={0} max={1440} step={1} suffix="min" onChange={(value) => onChange({ cooldownAfterSlMinutes: value })} />
           <CompactNumber label="Loss-streak lock" value={profile.lockAfterConsecutiveSl} min={0} max={10} step={1} suffix="SL" onChange={(value) => onChange({ lockAfterConsecutiveSl: value })} />

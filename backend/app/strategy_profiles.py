@@ -63,6 +63,7 @@ def _apply_pair(
     profile.maxLot = max_lot
     profile.maxOpenPositions = max_positions
     profile.maxTotalLot = max_total_lot
+    profile.dailyTradeLimitEnabled = True
     profile.maxDailyTrades = max_daily
     profile.maxHourlyTrades = max_hourly
     profile.aggregateSlRiskCapPercent = aggregate_cap
