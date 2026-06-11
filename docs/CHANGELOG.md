@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added the AFPL v8 license, copyright notice, AI usage policy, repository agent policy, package license metadata, and an in-app copyright footer.
 - Added a live `Strategy System` parameter-check page covering runtime health, pair profiles, strategy components, risk limits, exposure, pair state, market data, confluence, signal logger, and decision audit.
 - Added config v2 pair profiles with automatic backup, atomic migration, rollback-safe shadow mode, and persistent pair state.
 - Added strict EURUSD Market Fact Gate, fresh Investing M15/M30/H1 validation, Fibonacci pivot guard, news guard, cooldown/loss locks, closed-candle confirmation, and signal expiry.

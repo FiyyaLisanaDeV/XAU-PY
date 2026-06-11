@@ -5,6 +5,7 @@
 [![MT5](https://img.shields.io/badge/execution-MetaTrader%205-0f172a)](#mt5-setup)
 [![Tests](https://img.shields.io/badge/tests-40%20passing-16a34a)](#verification)
 [![Safety](https://img.shields.io/badge/default-shadow%20mode-f59e0b)](#safety-first)
+[![License](https://img.shields.io/badge/license-AFPL--8-b91c1c)](#license-and-copyright)
 
 Local trading control center for `XAUUSD` and `EURUSD`, built with FastAPI, React, and MetaTrader 5 integration.
 
@@ -500,6 +501,29 @@ EURUSD intentionally fails closed when required data cannot be trusted.
 | [Strategy and risk guide](docs/STRATEGY_AND_RISK.md) | Strategy, trailing, risk, and recovery behavior |
 | [Decision guide](docs/APP_DECISION_GUIDE.md) | Operational decision rules |
 | [Change log](docs/CHANGELOG.md) | Implementation history |
+
+## License And Copyright
+
+Copyright (C) 2026 **FiyyaLisanaDeV**. All rights reserved except for rights
+expressly granted under the **Aladdin Free Public License, Version 8**.
+
+Unauthorized copying, modification, sublicensing, or distribution outside the
+AFPL permissions is prohibited and may terminate the rights granted by the
+license.
+
+> [!IMPORTANT]
+> AFPL is a source-available license with specific copying and non-commercial
+> distribution rights. It is not a blanket "no-copy" proprietary license.
+
+AI agents and automated systems must also read:
+
+- [Full AFPL license](LICENSE)
+- [Copyright notice](COPYRIGHT)
+- [AI usage policy](AI_USAGE_POLICY.md)
+- [Repository agent policy](AGENTS.md)
+
+Public visibility does not grant access to credentials, broker data, runtime
+logs, account history, branding rights, or permissions beyond the AFPL.
 
 ## Repository
 

@@ -988,6 +988,19 @@ button {
   min-width: 1280px;
 }
 
+.app-copyright {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 14px 2px 2px;
+  border-top: 1px solid #cbd5e1;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 @media (max-width: 1180px) {
   .settings-layout,
   .confluence-groups {
@@ -1054,6 +1067,11 @@ button {
 
   .parameter-status-strip {
     grid-template-columns: 1fr;
+  }
+
+  .app-copyright {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

@@ -1178,6 +1178,10 @@ function App() {
       )}
 
       {toast && <div className="toast">{toast}</div>}
+      <footer className="app-copyright">
+        <span>Copyright (C) 2026 FiyyaLisanaDeV.</span>
+        <span>Licensed under AFPL v8. Unauthorized use outside the license is prohibited.</span>
+      </footer>
     </main>
   );
 }
