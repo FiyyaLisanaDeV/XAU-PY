@@ -30,8 +30,12 @@ Local FastAPI + React dashboard for `XAUUSD` and `EURUSD` trading workflow with 
 | Hedge recovery | configurable, default `OFF` |
 | Recovery layers | maximum `2`, multiplier maximum `1.50x` |
 | Account money mode | `USD` or `USC`; `100 USC = 1 USD` |
+| Minimum balance calculator | dynamic from current M15/M30/H1 stop distance at `0.01` lot |
 | Investing auto sync | every `60 seconds` |
 | Restart all services | frontend button starts `5174` if needed and restarts backend `9000` |
+| Config safety | v2 migration backup + shadow mode |
+| XAUUSD aggregate SL cap | `15%` of `min(balance, equity)` |
+| EURUSD profile | strict gate, `0.25%` risk, `0.05` max lot, one open position |
 
 ## How The System Decides
 
@@ -120,6 +124,8 @@ http://127.0.0.1:9000/api/ea/status
 ```
 
 For an Exness cent account, select `USC - cent account` in Settings. Balance, equity, P/L, and journal values remain displayed in USC, while USD strategy targets and equity-based risk are converted using `100 USC = 1 USD`.
+
+The Settings page also calculates a dynamic minimum balance. It uses the widest current strategy stop across active execution timeframes, the `0.5%` per-position guard, and a `25%` operating reserve. This is a risk-capacity estimate, not a profit guarantee.
 
 ## Main API Endpoints
 

@@ -205,9 +205,85 @@ interface RiskExposure {
   items?: unknown[];
 }
 
+interface MinimumBalanceEstimate {
+  minimumUsd: number;
+  recommendedUsd: number;
+  minimumAccountUnits: number;
+  recommendedAccountUnits: number;
+  currentEquityUsd: number;
+  sufficient: boolean;
+  reservePercent: number;
+  minLot: number;
+  maxRiskPerPositionPercent: number;
+  pairs: Array<{
+    symbol: SymbolName;
+    riskAtMinLotUsd: number;
+    requiredEquityUsd: number;
+    sourceTimeframe: Timeframe | null;
+  }>;
+  message: string;
+}
+
+interface PairProfile {
+  enabled: boolean;
+  maxSpread: number;
+  maxLot: number;
+  riskPercent: number;
+  minRiskReward: number;
+  investingMode: "advisory" | "required" | "disabled";
+  pivotRequired: boolean;
+  marketFactGate: "advisory" | "strict" | "disabled";
+  mt5RealDataRequired: boolean;
+  recoveryEnabled: boolean;
+  cooldownAfterSlMinutes: number;
+  lockAfterConsecutiveSl: number;
+  dailyLossLimitPercent: number;
+  newsFilterEnabled: boolean;
+  loggingLevel: "normal" | "verbose";
+  maxOpenPositions: number;
+  maxPendingOrders: number;
+  maxSameDirectionPositions: number;
+  maxOppositeDirectionPositions: number;
+  maxTotalLot: number;
+  maxFloatingLossUsd: number;
+  maxDailyTrades: number;
+  maxHourlyTrades: number;
+  aggregateSlRiskCapPercent: number;
+  closeOnly: boolean;
+  trailingBreakEvenTriggerPips: number;
+  trailingBreakEvenLockPips: number;
+  trailingTriggerPips: number;
+  trailingDistancePips: number;
+  trailingStepPips: number;
+  minStopPips: number;
+  maxStopPips: number;
+}
+
+interface PairExposureStatus {
+  symbol: SymbolName;
+  openPositions: number;
+  maxOpenPositions: number;
+  pendingOrders: number;
+  maxPendingOrders: number;
+  buyPositions: number;
+  sellPositions: number;
+  totalLot: number;
+  maxTotalLot: number;
+  floatingPnlAccount: number;
+  aggregateSlRiskUsd: number;
+  aggregateSlRiskPercent: number;
+  aggregateSlRiskCapPercent: number;
+  status: "SAFE" | "WARNING" | "BLOCKED" | "CLOSE_ONLY" | "LOCKED";
+  tradeMode: "NORMAL" | "CLOSE_ONLY" | "LOCKED";
+  reasons: string[];
+}
+
 interface AutoModeStatus {
+  configVersion: number;
+  shadowMode: boolean;
   enabled: boolean;
   accountMode: AccountMode;
+  pairProfiles: Record<SymbolName, PairProfile>;
   activeSymbols: SymbolName[];
   hardTakeProfitUsd: Record<SymbolName, number>;
   recoveryEnabled: boolean;
@@ -222,6 +298,7 @@ interface AutoModeStatus {
   recoveryCooldownSeconds: number;
   shockAtrMultiplier: number;
   maxTotalRiskPercent: number;
+  maxTotalOpenPositionsAllPairs: number;
   minScore: number;
   riskMode: RiskMode;
   riskValue: number;
@@ -231,6 +308,8 @@ interface AutoModeStatus {
   lastAction: string | null;
   blockedReason: string | null;
   exposure: RiskExposure;
+  minimumBalance: MinimumBalanceEstimate;
+  pairExposure: PairExposureStatus[];
 }
 
 interface RecoveryCycleStatus {
@@ -324,8 +403,11 @@ interface ConfluenceScoreCard {
 }
 
 interface StrategyRiskSettings {
+  configVersion: number;
+  shadowMode: boolean;
   enabled: boolean;
   accountMode: AccountMode;
+  pairProfiles: Record<SymbolName, PairProfile>;
   activeSymbols: SymbolName[];
   xauusdHardTpUsd: string;
   eurusdHardTpUsd: string;
@@ -344,6 +426,7 @@ interface StrategyRiskSettings {
   recoveryCooldownSeconds: string;
   shockAtrMultiplier: string;
   maxTotalRiskPercent: string;
+  maxTotalOpenPositionsAllPairs: string;
   minScore: string;
   riskMode: RiskMode;
   riskValue: string;
@@ -493,8 +576,36 @@ const defaultIndicators: Record<IndicatorKey, boolean> = {
 const SCORE_BLOCK_REASON = "Confluence score below 60";
 const INVESTING_AUTO_SYNC_SECONDS = 60;
 const defaultStrategyRiskSettings: StrategyRiskSettings = {
+  configVersion: 2,
+  shadowMode: true,
   enabled: true,
   accountMode: "USD",
+  pairProfiles: {
+    XAUUSD: {
+      enabled: true, maxSpread: 350, maxLot: 0.1, riskPercent: 0.5, minRiskReward: 1.2,
+      investingMode: "advisory", pivotRequired: false, marketFactGate: "advisory",
+      mt5RealDataRequired: true, recoveryEnabled: true, cooldownAfterSlMinutes: 0,
+      lockAfterConsecutiveSl: 0, dailyLossLimitPercent: 0, newsFilterEnabled: false,
+      loggingLevel: "normal", maxOpenPositions: 5, maxPendingOrders: 2,
+      maxSameDirectionPositions: 3, maxOppositeDirectionPositions: 2, maxTotalLot: 0.5,
+      maxFloatingLossUsd: 0, maxDailyTrades: 20, maxHourlyTrades: 8,
+      aggregateSlRiskCapPercent: 15, closeOnly: false, trailingBreakEvenTriggerPips: 5,
+      trailingBreakEvenLockPips: 1, trailingTriggerPips: 8, trailingDistancePips: 4,
+      trailingStepPips: 2, minStopPips: 0, maxStopPips: 0
+    },
+    EURUSD: {
+      enabled: true, maxSpread: 18, maxLot: 0.05, riskPercent: 0.25, minRiskReward: 1.5,
+      investingMode: "required", pivotRequired: true, marketFactGate: "strict",
+      mt5RealDataRequired: true, recoveryEnabled: false, cooldownAfterSlMinutes: 30,
+      lockAfterConsecutiveSl: 2, dailyLossLimitPercent: 1, newsFilterEnabled: true,
+      loggingLevel: "verbose", maxOpenPositions: 1, maxPendingOrders: 0,
+      maxSameDirectionPositions: 1, maxOppositeDirectionPositions: 0, maxTotalLot: 0.05,
+      maxFloatingLossUsd: 0, maxDailyTrades: 5, maxHourlyTrades: 2,
+      aggregateSlRiskCapPercent: 5, closeOnly: false, trailingBreakEvenTriggerPips: 5,
+      trailingBreakEvenLockPips: 1, trailingTriggerPips: 8, trailingDistancePips: 4,
+      trailingStepPips: 2, minStopPips: 10, maxStopPips: 30
+    }
+  },
   activeSymbols: ["XAUUSD", "EURUSD"],
   xauusdHardTpUsd: "10",
   eurusdHardTpUsd: "10",
@@ -513,6 +624,7 @@ const defaultStrategyRiskSettings: StrategyRiskSettings = {
   recoveryCooldownSeconds: "60",
   shockAtrMultiplier: "1.5",
   maxTotalRiskPercent: "20",
+  maxTotalOpenPositionsAllPairs: "15",
   minScore: "60",
   riskMode: "percent_equity",
   riskValue: "0.5",
@@ -522,8 +634,11 @@ const defaultStrategyRiskSettings: StrategyRiskSettings = {
 
 function strategySettingsFromAutoMode(autoMode: AutoModeStatus): StrategyRiskSettings {
   return {
+    configVersion: autoMode.configVersion ?? 2,
+    shadowMode: autoMode.shadowMode ?? true,
     enabled: autoMode.enabled,
     accountMode: autoMode.accountMode ?? "USD",
+    pairProfiles: autoMode.pairProfiles ?? defaultStrategyRiskSettings.pairProfiles,
     activeSymbols: autoMode.activeSymbols ?? ["XAUUSD", "EURUSD"],
     xauusdHardTpUsd: String(autoMode.hardTakeProfitUsd?.XAUUSD ?? 10),
     eurusdHardTpUsd: String(autoMode.hardTakeProfitUsd?.EURUSD ?? 10),
@@ -542,6 +657,7 @@ function strategySettingsFromAutoMode(autoMode: AutoModeStatus): StrategyRiskSet
     recoveryCooldownSeconds: String(autoMode.recoveryCooldownSeconds ?? 60),
     shockAtrMultiplier: String(autoMode.shockAtrMultiplier ?? 1.5),
     maxTotalRiskPercent: String(autoMode.maxTotalRiskPercent),
+    maxTotalOpenPositionsAllPairs: String(autoMode.maxTotalOpenPositionsAllPairs ?? 15),
     minScore: String(autoMode.minScore),
     riskMode: autoMode.riskMode,
     riskValue: String(autoMode.riskValue),
@@ -715,8 +831,11 @@ function App() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        configVersion: 2,
+        shadowMode: nextSettings.shadowMode,
         enabled: nextSettings.enabled,
         accountMode: nextSettings.accountMode,
+        pairProfiles: nextSettings.pairProfiles,
         activeSymbols: nextSettings.activeSymbols.length > 0 ? nextSettings.activeSymbols : ["XAUUSD", "EURUSD"],
         hardTakeProfitUsd: {
           XAUUSD: positiveNumber(nextSettings.xauusdHardTpUsd, 10),
@@ -743,6 +862,7 @@ function App() {
         recoveryCooldownSeconds: Math.round(clampNumber(nextSettings.recoveryCooldownSeconds, 15, 3600, 60)),
         shockAtrMultiplier: clampNumber(nextSettings.shockAtrMultiplier, 1, 5, 1.5),
         maxTotalRiskPercent: clampNumber(nextSettings.maxTotalRiskPercent, 0.1, 100, 20),
+        maxTotalOpenPositionsAllPairs: Math.round(clampNumber(nextSettings.maxTotalOpenPositionsAllPairs, 1, 50, 15)),
         minScore: Math.round(clampNumber(nextSettings.minScore, 0, 100, 60)),
         riskMode: nextSettings.riskMode,
         riskValue: positiveNumber(nextSettings.riskValue, 0.5),
@@ -1251,6 +1371,14 @@ function StrategySettingsPage({
   onReset: () => void;
 }) {
   const exposure = autoMode?.exposure;
+  const updatePairProfile = (symbol: SymbolName, patch: Partial<PairProfile>) => {
+    onChange({
+      pairProfiles: {
+        ...settings.pairProfiles,
+        [symbol]: { ...settings.pairProfiles[symbol], ...patch }
+      }
+    });
+  };
   return (
     <section className="settings-page">
       <div className="summary-section-heading">
@@ -1270,6 +1398,10 @@ function StrategySettingsPage({
           <label className="settings-toggle">
             <input type="checkbox" checked={settings.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} />
             <span>Full Auto enabled</span>
+          </label>
+          <label className="settings-toggle">
+            <input type="checkbox" checked={settings.shadowMode} onChange={(event) => onChange({ shadowMode: event.target.checked })} />
+            <span>Shadow mode (validate and log, do not send orders)</span>
           </label>
           <SettingsNumber label="Minimum confluence score" value={settings.minScore} min={0} max={100} step={1} suffix="score" onChange={(value) => onChange({ minScore: value })} />
           <SettingsNumber label="Scan interval" value={settings.scanIntervalSeconds} min={5} max={300} step={1} suffix="seconds" onChange={(value) => onChange({ scanIntervalSeconds: value })} />
@@ -1299,17 +1431,29 @@ function StrategySettingsPage({
 
         <section className="settings-card">
           <div className="settings-card-heading">
+            <strong>Account Type</strong>
+            <span className="settings-state on">{settings.accountMode}</span>
+          </div>
+          <div className="account-mode-grid">
+            <label className={settings.accountMode === "USD" ? "account-mode-option active" : "account-mode-option"}>
+              <input type="radio" name="account-mode" checked={settings.accountMode === "USD"} onChange={() => onChange({ accountMode: "USD" })} />
+              <strong>Standard USD</strong>
+              <small>1 account unit = 1 USD</small>
+            </label>
+            <label className={settings.accountMode === "USC" ? "account-mode-option active" : "account-mode-option"}>
+              <input type="radio" name="account-mode" checked={settings.accountMode === "USC"} onChange={() => onChange({ accountMode: "USC" })} />
+              <strong>USC Cent</strong>
+              <small>100 USC = 1 USD</small>
+            </label>
+          </div>
+          <small>Mode mengubah kalkulasi equity, P/L, Hard TP, hedge, dan basket target setelah Save settings.</small>
+        </section>
+
+        <section className="settings-card">
+          <div className="settings-card-heading">
             <strong>Risk</strong>
             <span>{formatPercent(exposure?.totalRiskPercent)} used</span>
           </div>
-          <label className="settings-field">
-            <span>Account money mode</span>
-            <select value={settings.accountMode} onChange={(event) => onChange({ accountMode: event.target.value as AccountMode })}>
-              <option value="USD">USD - standard account</option>
-              <option value="USC">USC - cent account</option>
-            </select>
-            <small>{settings.accountMode === "USC" ? "100 USC = 1 USD. Broker P/L targets are multiplied by 100." : "1 account unit = 1 USD."}</small>
-          </label>
           <label className="settings-field">
             <span>Risk mode</span>
             <select value={settings.riskMode} onChange={(event) => onChange({ riskMode: event.target.value as RiskMode })}>
@@ -1320,12 +1464,25 @@ function StrategySettingsPage({
           </label>
           <SettingsNumber label="Risk value per order" value={settings.riskValue} min={0.01} step={0.01} suffix={riskModeSuffix(settings.riskMode)} onChange={(value) => onChange({ riskValue: value })} />
           <SettingsNumber label="Total risk cap" value={settings.maxTotalRiskPercent} min={0.1} max={100} step={0.1} suffix="%" onChange={(value) => onChange({ maxTotalRiskPercent: value })} />
+          <SettingsNumber label="All-pair open position cap" value={settings.maxTotalOpenPositionsAllPairs} min={1} max={50} step={1} suffix="positions" onChange={(value) => onChange({ maxTotalOpenPositionsAllPairs: value })} />
           <div className="settings-risk-preview">
             <Metric label="Total risk" value={`${formatPercent(exposure?.totalRiskPercent)} / ${formatPercent(autoMode?.maxTotalRiskPercent ?? 20)}`} />
             <Metric label="Available" value={formatPercent(exposure?.availableRiskPercent)} />
             <Metric label="Account mode" value={settings.accountMode} />
           </div>
         </section>
+
+        <MinimumBalanceCard estimate={autoMode?.minimumBalance ?? null} accountMode={settings.accountMode} />
+
+        {symbols.map((symbol) => (
+          <PairProfileCard
+            key={symbol}
+            symbol={symbol}
+            profile={settings.pairProfiles[symbol]}
+            exposure={autoMode?.pairExposure?.find((item) => item.symbol === symbol) ?? null}
+            onChange={(patch) => updatePairProfile(symbol, patch)}
+          />
+        ))}
 
         <section className="settings-card">
           <div className="settings-card-heading">
@@ -1420,6 +1577,104 @@ function StrategySettingsPage({
         <button className="summary-refresh" onClick={onSave}>Save settings</button>
         <button className="settings-secondary" onClick={onReset}>Reset form</button>
       </div>
+    </section>
+  );
+}
+
+function PairProfileCard({
+  symbol,
+  profile,
+  exposure,
+  onChange
+}: {
+  symbol: SymbolName;
+  profile: PairProfile;
+  exposure: PairExposureStatus | null;
+  onChange: (patch: Partial<PairProfile>) => void;
+}) {
+  return (
+    <section className="settings-card pair-profile-card">
+      <div className="settings-card-heading">
+        <strong>{symbol} Pair Profile</strong>
+        <span className={`exposure-state ${exposure?.status?.toLowerCase() ?? "blocked"}`}>{exposure?.status ?? "NO DATA"}</span>
+      </div>
+      <div className="settings-toggle-row">
+        <label className="settings-toggle"><input type="checkbox" checked={profile.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} /><span>Pair enabled</span></label>
+        <label className="settings-toggle"><input type="checkbox" checked={profile.closeOnly} onChange={(event) => onChange({ closeOnly: event.target.checked })} /><span>Close-only</span></label>
+        <label className="settings-toggle"><input type="checkbox" checked={profile.recoveryEnabled} onChange={(event) => onChange({ recoveryEnabled: event.target.checked })} /><span>Recovery</span></label>
+        <label className="settings-toggle"><input type="checkbox" checked={profile.pivotRequired} onChange={(event) => onChange({ pivotRequired: event.target.checked })} /><span>Pivot required</span></label>
+        <label className="settings-toggle"><input type="checkbox" checked={profile.newsFilterEnabled} onChange={(event) => onChange({ newsFilterEnabled: event.target.checked })} /><span>News filter</span></label>
+      </div>
+      <label className="settings-field"><span>Investing mode</span><select value={profile.investingMode} onChange={(event) => onChange({ investingMode: event.target.value as PairProfile["investingMode"] })}><option value="advisory">Advisory</option><option value="required">Required</option><option value="disabled">Disabled</option></select></label>
+      <label className="settings-field"><span>Market Fact Gate</span><select value={profile.marketFactGate} onChange={(event) => onChange({ marketFactGate: event.target.value as PairProfile["marketFactGate"] })}><option value="advisory">Advisory</option><option value="strict">Strict</option><option value="disabled">Disabled</option></select></label>
+      <div className="pair-profile-grid">
+        <CompactNumber label="Risk" value={profile.riskPercent} min={0.01} max={0.5} step={0.01} suffix="%" onChange={(value) => onChange({ riskPercent: value })} />
+        <CompactNumber label="Max lot" value={profile.maxLot} min={0.01} max={0.1} step={0.01} suffix="lot" onChange={(value) => onChange({ maxLot: value })} />
+        <CompactNumber label="Min RR" value={profile.minRiskReward} min={1} max={5} step={0.1} suffix="R" onChange={(value) => onChange({ minRiskReward: value })} />
+        <CompactNumber label="Max spread" value={profile.maxSpread} min={1} max={1000} step={1} suffix="pts" onChange={(value) => onChange({ maxSpread: value })} />
+        <CompactNumber label="Open positions" value={profile.maxOpenPositions} min={1} max={20} step={1} suffix="max" onChange={(value) => onChange({ maxOpenPositions: value })} />
+        <CompactNumber label="Pending orders" value={profile.maxPendingOrders} min={0} max={20} step={1} suffix="max" onChange={(value) => onChange({ maxPendingOrders: value })} />
+        <CompactNumber label="Max total lot" value={profile.maxTotalLot} min={0.01} max={2} step={0.01} suffix="lot" onChange={(value) => onChange({ maxTotalLot: value })} />
+        <CompactNumber label="Aggregate SL cap" value={profile.aggregateSlRiskCapPercent} min={1} max={30} step={0.5} suffix="%" onChange={(value) => onChange({ aggregateSlRiskCapPercent: value })} />
+        <CompactNumber label="Daily trades" value={profile.maxDailyTrades} min={0} max={100} step={1} suffix="max" onChange={(value) => onChange({ maxDailyTrades: value })} />
+        <CompactNumber label="Hourly trades" value={profile.maxHourlyTrades} min={0} max={20} step={1} suffix="max" onChange={(value) => onChange({ maxHourlyTrades: value })} />
+        <CompactNumber label="SL cooldown" value={profile.cooldownAfterSlMinutes} min={0} max={1440} step={1} suffix="min" onChange={(value) => onChange({ cooldownAfterSlMinutes: value })} />
+        <CompactNumber label="Loss-streak lock" value={profile.lockAfterConsecutiveSl} min={0} max={10} step={1} suffix="SL" onChange={(value) => onChange({ lockAfterConsecutiveSl: value })} />
+      </div>
+      {symbol === "EURUSD" && (
+        <div className="pair-profile-grid">
+          <CompactNumber label="Break-even trigger" value={profile.trailingBreakEvenTriggerPips} min={0} max={100} step={1} suffix="pips" onChange={(value) => onChange({ trailingBreakEvenTriggerPips: value })} />
+          <CompactNumber label="Break-even lock" value={profile.trailingBreakEvenLockPips} min={0} max={100} step={1} suffix="pips" onChange={(value) => onChange({ trailingBreakEvenLockPips: value })} />
+          <CompactNumber label="Trailing trigger" value={profile.trailingTriggerPips} min={0} max={100} step={1} suffix="pips" onChange={(value) => onChange({ trailingTriggerPips: value })} />
+          <CompactNumber label="Trailing distance" value={profile.trailingDistancePips} min={1} max={100} step={1} suffix="pips" onChange={(value) => onChange({ trailingDistancePips: value })} />
+          <CompactNumber label="Trailing step" value={profile.trailingStepPips} min={1} max={100} step={1} suffix="pips" onChange={(value) => onChange({ trailingStepPips: value })} />
+          <CompactNumber label="Daily loss limit" value={profile.dailyLossLimitPercent} min={0} max={20} step={0.1} suffix="%" onChange={(value) => onChange({ dailyLossLimitPercent: value })} />
+        </div>
+      )}
+      <div className="settings-risk-preview">
+        <Metric label="Open" value={`${exposure?.openPositions ?? 0} / ${profile.maxOpenPositions}`} />
+        <Metric label="Pending" value={`${exposure?.pendingOrders ?? 0} / ${profile.maxPendingOrders}`} />
+        <Metric label="Total lot" value={`${(exposure?.totalLot ?? 0).toFixed(2)} / ${profile.maxTotalLot.toFixed(2)}`} />
+        <Metric label="SL exposure" value={`${(exposure?.aggregateSlRiskPercent ?? 0).toFixed(2)}% / ${profile.aggregateSlRiskCapPercent}%`} />
+        <Metric label="Floating P/L" value={formatMoney(exposure?.floatingPnlAccount ?? 0)} />
+        <Metric label="Trade mode" value={exposure?.tradeMode ?? "UNKNOWN"} />
+      </div>
+      {(exposure?.reasons ?? []).slice(0, 3).map((reason) => <small key={reason} className="pair-exposure-reason">{reason}</small>)}
+    </section>
+  );
+}
+
+function CompactNumber({ label, value, min, max, step, suffix, onChange }: { label: string; value: number; min: number; max: number; step: number; suffix: string; onChange: (value: number) => void }) {
+  return <label className="compact-number"><span>{label}</span><div><input type="number" value={value} min={min} max={max} step={step} onChange={(event) => onChange(clampNumber(event.target.value, min, max, value))} /><small>{suffix}</small></div></label>;
+}
+
+function MinimumBalanceCard({ estimate, accountMode }: { estimate: MinimumBalanceEstimate | null; accountMode: AccountMode }) {
+  return (
+    <section className="settings-card minimum-balance-card">
+      <div className="settings-card-heading">
+        <strong>Minimum Balance</strong>
+        <span className={estimate?.sufficient ? "settings-state on" : "settings-state off"}>{estimate?.sufficient ? "SUFFICIENT" : "BELOW"}</span>
+      </div>
+      <div className="minimum-balance-hero">
+        <span>Recommended with {formatPercent(estimate?.reservePercent ?? 25)} reserve</span>
+        <strong>{formatModeAmount(estimate?.recommendedAccountUnits ?? 0, accountMode)}</strong>
+        <small>Technical minimum {formatModeAmount(estimate?.minimumAccountUnits ?? 0, accountMode)}</small>
+      </div>
+      <div className="settings-risk-preview">
+        <Metric label="Current equity" value={formatMoney(estimate?.currentEquityUsd ?? 0)} />
+        <Metric label="Recommended USD" value={formatMoney(estimate?.recommendedUsd ?? 0)} />
+        <Metric label="Min lot" value={(estimate?.minLot ?? 0.01).toFixed(2)} />
+      </div>
+      <div className="minimum-pair-list">
+        {(estimate?.pairs ?? []).map((pair) => (
+          <div key={pair.symbol}>
+            <strong>{pair.symbol}</strong>
+            <span>{formatMoney(pair.requiredEquityUsd)} minimum</span>
+            <small>{formatMoney(pair.riskAtMinLotUsd)} risk at 0.01 lot · {pair.sourceTimeframe ?? "fallback"}</small>
+          </div>
+        ))}
+      </div>
+      <small>{estimate?.message ?? "Calculating current strategy stop distances..."}</small>
     </section>
   );
 }
@@ -3007,6 +3262,13 @@ function usdToAccountMoney(valueUsd: number, accountMode: AccountMode) {
 function formatAccountMoney(value: number, accountMode: AccountMode) {
   if (accountMode === "USC") {
     return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value)} USC`;
+  }
+  return formatMoney(value);
+}
+
+function formatModeAmount(value: number, accountMode: AccountMode) {
+  if (accountMode === "USC") {
+    return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value)} USC`;
   }
   return formatMoney(value);
 }

@@ -100,6 +100,18 @@ target_usc = target_usd * 100
 
 This keeps `0.5%` risk equivalent between standard and cent accounts while preserving USC values in the dashboard.
 
+## Minimum Balance Estimate
+
+For every active pair, the backend checks the widest current strategy stop on `M15`, `M30`, and `H1` at lot `0.01`:
+
+```text
+risk_at_min_lot = abs(entry - stop_loss) * contract_size * 0.01
+required_equity = risk_at_min_lot / 0.005
+recommended_equity = required_equity * 1.25
+```
+
+The largest pair requirement becomes the account minimum. The additional `25%` reserve reduces the chance that ordinary volatility, spread expansion, or a slightly wider setup makes the minimum lot fail the `0.5%` risk guard. The estimate does not guarantee strategy performance.
+
 Contract sizes:
 
 | Pair | Contract size |

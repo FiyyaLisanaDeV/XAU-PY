@@ -31,6 +31,18 @@ In USC mode:
 - Broker equity is divided by `100` before percent-equity and total-risk calculations.
 - Account mode cannot change during an active hedge/recovery basket.
 
+## Minimum Balance Calculator
+
+The Settings page calculates:
+
+- Risk at the minimum `0.01` lot for each active pair.
+- Required equity so that risk remains within `0.5%` per position.
+- The highest pair requirement as the technical minimum.
+- A recommended balance with a `25%` operating reserve.
+- USD and USC equivalents plus current-equity sufficiency.
+
+The calculation reads current `M15`, `M30`, and `H1` strategy stop distances and refreshes at least every `60 seconds`. It is intentionally dynamic because XAUUSD volatility and stop distance can change materially.
+
 ## Position Controls
 
 | Control | Behavior |

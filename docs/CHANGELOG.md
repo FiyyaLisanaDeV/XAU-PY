@@ -4,9 +4,16 @@
 
 ### Added
 
+- Added config v2 pair profiles with automatic backup, atomic migration, rollback-safe shadow mode, and persistent pair state.
+- Added strict EURUSD Market Fact Gate, fresh Investing M15/M30/H1 validation, Fibonacci pivot guard, news guard, cooldown/loss locks, closed-candle confirmation, and signal expiry.
+- Added EURUSD 10-30 pip ATR stop clamp, 1.6R target, and configurable pip-based break-even/trailing.
+- Added XAUUSD aggregate SL exposure calculation including open positions, pending orders, and candidate orders, with pair-level execution locking.
+- Added pair exposure API/cards, close-only controls, all-pair position cap, signal audit log, and a 1,500-candidate exposure safety simulation.
 - Added manual `USD / USC` account mode with `100 USC = 1 USD`.
 - Added USC-aware hard TP, trailing trigger, hedge target, basket target, emergency loss cap, and equity-risk conversion.
 - Added USC labels across account summary, pair performance, and open-position P/L.
+- Added explicit Standard USD / USC Cent selection cards in Settings.
+- Added a dynamic minimum-balance calculator using current execution-timeframe SL distance, `0.01` lot, the `0.5%` position-risk guard, and a `25%` reserve.
 - Added optional bounded martingale hedge recovery, disabled by default.
 - Added completed-candle M15/M30 reversal scoring and original-direction recovery confirmation.
 - Added persisted recovery phases: `NORMAL`, `HEDGE_ACTIVE`, `WAIT_RECOVERY`, `RECOVERY_ACTIVE`, `BASKET_EXIT`, and `EMERGENCY_EXIT`.

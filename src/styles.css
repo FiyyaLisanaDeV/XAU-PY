@@ -548,6 +548,92 @@ button {
   height: 18px;
 }
 
+.account-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.account-mode-option {
+  min-width: 0;
+  min-height: 84px;
+  padding: 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 4px 8px;
+  align-content: center;
+}
+
+.account-mode-option.active {
+  border-color: #0f766e;
+  background: #ecfdf5;
+}
+
+.account-mode-option input {
+  grid-row: 1 / span 2;
+  width: 16px;
+  height: 16px;
+}
+
+.account-mode-option strong,
+.account-mode-option small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.account-mode-option small,
+.minimum-balance-card > small,
+.minimum-pair-list small {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.minimum-balance-hero {
+  padding: 12px;
+  border: 1px solid #bae6fd;
+  border-radius: 8px;
+  background: #f0f9ff;
+  display: grid;
+  gap: 4px;
+}
+
+.minimum-balance-hero span,
+.minimum-balance-hero small {
+  color: #0369a1;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.minimum-balance-hero strong {
+  color: #0c4a6e;
+  font-size: 24px;
+  overflow-wrap: anywhere;
+}
+
+.minimum-pair-list {
+  display: grid;
+  gap: 8px;
+}
+
+.minimum-pair-list > div {
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  display: grid;
+  gap: 3px;
+}
+
+.minimum-pair-list span {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 900;
+}
+
 .settings-field input,
 .settings-field select {
   width: 100%;
@@ -2726,5 +2812,71 @@ th {
 
   .lightweight-chart {
     min-height: 330px;
+  }
+}
+
+.settings-toggle-row,
+.pair-profile-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.pair-profile-card {
+  grid-column: span 2;
+}
+
+.compact-number {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.compact-number > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.compact-number > div {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.compact-number input {
+  min-width: 0;
+  width: 100%;
+}
+
+.exposure-state {
+  font-weight: 700;
+}
+
+.exposure-state.safe {
+  color: var(--green);
+}
+
+.exposure-state.warning {
+  color: #d79a22;
+}
+
+.exposure-state.blocked,
+.exposure-state.close_only,
+.exposure-state.locked,
+.pair-exposure-reason {
+  color: var(--red);
+}
+
+@media (max-width: 900px) {
+  .pair-profile-card {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 680px) {
+  .settings-toggle-row,
+  .pair-profile-grid {
+    grid-template-columns: 1fr;
   }
 }

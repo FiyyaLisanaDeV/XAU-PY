@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import socket
 import subprocess
@@ -39,11 +40,14 @@ from .models import (
     HistoryItem,
     MarketSnapshot,
     MarketTick,
+    MinimumBalanceEstimate,
+    MinimumBalancePair,
     OpenPosition,
     OrderRecommendation,
     OrderType,
     OrderValidation,
     PendingOrder,
+    PairExposureStatus,
     PositionSetupAlert,
     RiskExposure,
     RiskExposureItem,
@@ -61,6 +65,7 @@ from .models import (
     TrailingStopResponse,
 )
 from .economic_calendar import load_calendar_events
+from .audit_logger import append_audit
 from .investing_sync import (
     all_statuses as investing_all_statuses,
     all_technicals as investing_all_technicals,
@@ -71,7 +76,9 @@ from .investing_sync import (
     refresh_investing_data,
 )
 from .mt5_bridge import MT5Bridge
-from .risk import build_risk_exposure, round_down_lot, validate_order
+from .pair_engine import apply_pair_risk_model, build_pair_exposure, evaluate_pair_gate
+from .pair_state import PairStateStore
+from .risk import MAX_RISK_PERCENT, MIN_LOT, build_risk_exposure, risk_usd_for, round_down_lot, validate_order
 from .recovery import atr_price, recovery_confirmed, reversal_score
 from .signal_logger import SIGNAL_LOG_PATH, read_signal_log, record_potential_signal
 from .strategy import MAX_SPREAD, build_snapshot, recommend
@@ -124,16 +131,64 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RESET_STATE_PATH = PROJECT_ROOT / "data" / "reset_state.json"
 STRATEGY_SETTINGS_PATH = PROJECT_ROOT / "data" / "strategy_settings.json"
 RECOVERY_STATE_PATH = PROJECT_ROOT / "data" / "recovery_state.json"
+PAIR_STATE_PATH = PROJECT_ROOT / "data" / "pair_state.json"
+SETTINGS_V2_BACKUP_PATH = PROJECT_ROOT / "data" / "settings.backup-before-v2.json"
+MIGRATION_V2_LOG_PATH = PROJECT_ROOT / "data" / "migration-v2.log"
+SIGNAL_AUDIT_PATH = PROJECT_ROOT / "data" / "signal_audit.jsonl"
 bridge = MT5Bridge()
 history: list[HistoryItem] = []
 journal: list[TradingJournalEntry] = []
 SCAN_SYMBOLS: tuple[Symbol, ...] = ("XAUUSD", "EURUSD")
 SCAN_TIMEFRAMES: tuple[Timeframe, ...] = ("M15", "M30", "H1", "H4", "D1")
 EXECUTION_TIMEFRAMES: tuple[Timeframe, ...] = ("M15", "M30", "H1")
-try:
-    auto_config = AutoModeRequest.model_validate_json(STRATEGY_SETTINGS_PATH.read_text(encoding="utf-8"))
-except (OSError, ValueError):
-    auto_config = AutoModeRequest(enabled=False)
+
+
+def write_json_atomic(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f"{path.stem}.tmp{path.suffix}")
+    with temp.open("w", encoding="utf-8") as file:
+        json.dump(payload, file, indent=2)
+        file.flush()
+        os.fsync(file.fileno())
+    temp.replace(path)
+
+
+def load_strategy_settings() -> AutoModeRequest:
+    if not STRATEGY_SETTINGS_PATH.exists():
+        config = AutoModeRequest(enabled=False)
+        write_json_atomic(STRATEGY_SETTINGS_PATH, config.model_dump(mode="json"))
+        return config
+    try:
+        raw = json.loads(STRATEGY_SETTINGS_PATH.read_text(encoding="utf-8"))
+        if int(raw.get("configVersion", 1)) < 2:
+            SETTINGS_V2_BACKUP_PATH.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+            raw["configVersion"] = 2
+            raw["shadowMode"] = True
+            migrated = AutoModeRequest.model_validate(raw)
+            write_json_atomic(STRATEGY_SETTINGS_PATH, migrated.model_dump(mode="json"))
+            MIGRATION_V2_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            MIGRATION_V2_LOG_PATH.write_text(
+                f"{datetime.now(timezone.utc).isoformat()} migrated config v1 to v2; XAU behavior preserved; EUR strict profile added; shadow mode enabled.\n",
+                encoding="utf-8",
+            )
+            return migrated
+        return AutoModeRequest.model_validate(raw)
+    except Exception as exc:
+        if SETTINGS_V2_BACKUP_PATH.exists():
+            try:
+                return AutoModeRequest.model_validate_json(SETTINGS_V2_BACKUP_PATH.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        MIGRATION_V2_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        MIGRATION_V2_LOG_PATH.write_text(
+            f"{datetime.now(timezone.utc).isoformat()} migration/settings load failed: {exc}\n",
+            encoding="utf-8",
+        )
+        return AutoModeRequest(enabled=False, shadowMode=True)
+
+
+auto_config = load_strategy_settings()
+pair_state_store = PairStateStore(PAIR_STATE_PATH)
 auto_last_scan: str | None = None
 auto_last_action: str | None = None
 auto_blocked_reason: str | None = None
@@ -156,6 +211,8 @@ investing_sync_monitor_task: asyncio.Task[None] | None = None
 HEDGE_COMMENT_PREFIX = "XAPY-H-"
 RECOVERY_COMMENT_PREFIX = "XAPY-R"
 recovery_lock = Lock()
+pair_exposure_locks: dict[Symbol, Lock] = {symbol: Lock() for symbol in SCAN_SYMBOLS}
+minimum_balance_cache: tuple[datetime, tuple[Symbol, ...], str, MinimumBalanceEstimate] | None = None
 
 
 def load_recovery_cycles() -> dict[Symbol, RecoveryCycleStatus]:
@@ -200,8 +257,16 @@ class TrailingState:
 
 
 def active_scan_symbols() -> tuple[Symbol, ...]:
-    active = [symbol for symbol in SCAN_SYMBOLS if symbol in auto_config.activeSymbols]
+    active = [
+        symbol
+        for symbol in SCAN_SYMBOLS
+        if symbol in auto_config.activeSymbols and auto_config.pairProfiles[symbol].enabled
+    ]
     return tuple(active) if active else SCAN_SYMBOLS
+
+
+def pair_profile(symbol: Symbol):
+    return auto_config.pairProfiles[symbol]
 
 
 def account_money_factor() -> float:
@@ -282,6 +347,9 @@ def ea_status():
         "autoEnabled": auto_config.enabled,
         "accountMode": auto_config.accountMode,
         "accountMoneyFactor": account_money_factor(),
+        "configVersion": auto_config.configVersion,
+        "shadowMode": auto_config.shadowMode,
+        "pairStateHealthy": not pair_state_store.corrupt,
         "maxTotalRiskPercent": auto_config.maxTotalRiskPercent,
         "minScore": auto_config.minScore,
         "tradeReady": account.trade_ready,
@@ -413,6 +481,7 @@ def reset_data():
     auto_last_scan = None
     auto_last_action = None
     auto_blocked_reason = None
+    pair_state_store.reset()
     cleared.append("auto_runtime_state")
     if SIGNAL_LOG_PATH.exists():
         SIGNAL_LOG_PATH.write_text("", encoding="utf-8")
@@ -475,8 +544,7 @@ def set_auto_mode(request: AutoModeRequest):
     if not request.activeSymbols:
         request.activeSymbols = list(SCAN_SYMBOLS)
     auto_config = request
-    STRATEGY_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STRATEGY_SETTINGS_PATH.write_text(auto_config.model_dump_json(indent=2), encoding="utf-8")
+    write_json_atomic(STRATEGY_SETTINGS_PATH, auto_config.model_dump(mode="json"))
     auto_last_action = "Full Auto ON" if request.enabled else "Full Auto OFF"
     auto_blocked_reason = None if request.enabled else "Auto mode is OFF"
     return build_auto_status()
@@ -574,7 +642,7 @@ def enrich_signal(
         signal.lot = validation.lot if validation.valid else None
         signal.riskPercent = validation.risk_percent
         signal.blockedReasons.extend(validation.blockedReasons)
-    apply_investing_filter(signal)
+    apply_investing_filter(signal, pair_profile(signal.symbol).investingMode)
     record_potential_signal(snapshot, signal)
 
 
@@ -747,7 +815,9 @@ def trading_journal():
             continue
         key = f"{entry.ticket}-{entry.time}-{entry.closeReason}"
         combined[key] = entry
-    return sorted(combined.values(), key=lambda item: item.time, reverse=True)
+    result = sorted(combined.values(), key=lambda item: item.time, reverse=True)
+    sync_pair_states_from_closed_trades(result)
+    return result
 
 
 @app.get("/api/signal-log", response_model=list[SignalLogEntry])
@@ -801,8 +871,11 @@ def build_auto_status(exposure: RiskExposure | None = None) -> AutoModeStatus:
             max_total_risk_percent=auto_config.maxTotalRiskPercent,
         )
     return AutoModeStatus(
+        configVersion=auto_config.configVersion,
+        shadowMode=auto_config.shadowMode,
         enabled=auto_config.enabled,
         accountMode=auto_config.accountMode,
+        pairProfiles=auto_config.pairProfiles,
         activeSymbols=list(active_scan_symbols()),
         hardTakeProfitUsd=auto_config.hardTakeProfitUsd,
         recoveryEnabled=auto_config.recoveryEnabled,
@@ -817,6 +890,7 @@ def build_auto_status(exposure: RiskExposure | None = None) -> AutoModeStatus:
         recoveryCooldownSeconds=auto_config.recoveryCooldownSeconds,
         shockAtrMultiplier=auto_config.shockAtrMultiplier,
         maxTotalRiskPercent=auto_config.maxTotalRiskPercent,
+        maxTotalOpenPositionsAllPairs=auto_config.maxTotalOpenPositionsAllPairs,
         minScore=auto_config.minScore,
         riskMode=auto_config.riskMode,
         riskValue=auto_config.riskValue,
@@ -826,7 +900,183 @@ def build_auto_status(exposure: RiskExposure | None = None) -> AutoModeStatus:
         lastAction=auto_last_action,
         blockedReason=auto_blocked_reason,
         exposure=exposure,
+        minimumBalance=build_minimum_balance_estimate(exposure.equity),
+        pairExposure=build_all_pair_exposure(),
     )
+
+
+def build_all_pair_exposure() -> list[PairExposureStatus]:
+    account = bridge.status()
+    balance_usd = usd_from_broker_money(account.balance)
+    equity_usd = usd_from_broker_money(account.equity)
+    positions = bridge.open_positions()
+    pending = bridge.pending_orders()
+    return [
+        build_pair_exposure(
+            symbol,
+            pair_profile(symbol),
+            pair_state_store.get(symbol),
+            positions,
+            pending,
+            balance_usd,
+            equity_usd,
+        )
+        for symbol in SCAN_SYMBOLS
+    ]
+
+
+def sync_pair_states_from_closed_trades(entries: list[TradingJournalEntry] | None = None) -> None:
+    if pair_state_store.corrupt:
+        return
+    source = entries if entries is not None else bridge.recent_closed_deals()
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    hour_ago = now - timedelta(hours=1)
+    for symbol in SCAN_SYMBOLS:
+        profile = pair_profile(symbol)
+        pair_entries = sorted(
+            [entry for entry in source if entry.symbol == symbol],
+            key=lambda item: item.time,
+        )
+        daily_entries: list[TradingJournalEntry] = []
+        hourly_entries: list[TradingJournalEntry] = []
+        for entry in pair_entries:
+            try:
+                closed_at = datetime.fromisoformat(entry.time)
+                if closed_at.tzinfo is None:
+                    closed_at = closed_at.replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            if closed_at.date() == today:
+                daily_entries.append(entry)
+            if closed_at >= hour_ago:
+                hourly_entries.append(entry)
+        loss_streak = 0
+        for entry in reversed(pair_entries):
+            if entry.closeReason == "sl" or (entry.profit or 0) < 0:
+                loss_streak += 1
+            else:
+                break
+        latest_sl = next(
+            (entry for entry in reversed(pair_entries) if entry.closeReason == "sl"),
+            None,
+        )
+        locked_until = None
+        lock_reason = None
+        if latest_sl and profile.cooldownAfterSlMinutes > 0:
+            try:
+                latest_sl_at = datetime.fromisoformat(latest_sl.time)
+                if latest_sl_at.tzinfo is None:
+                    latest_sl_at = latest_sl_at.replace(tzinfo=timezone.utc)
+                candidate_lock = latest_sl_at + timedelta(minutes=profile.cooldownAfterSlMinutes)
+                if candidate_lock > now:
+                    locked_until = candidate_lock.isoformat()
+                    lock_reason = f"{symbol} blocked: cooldown after stop loss"
+            except ValueError:
+                pass
+        if profile.lockAfterConsecutiveSl > 0 and loss_streak >= profile.lockAfterConsecutiveSl:
+            locked_until = (now + timedelta(days=1)).isoformat()
+            lock_reason = f"{symbol} blocked: consecutive stop-loss lock"
+        daily_loss_usd = abs(sum(min(usd_from_broker_money(entry.profit or 0), 0) for entry in daily_entries))
+    try:
+        equity_usd = max(account_equity_usd(), 0.01)
+    except AttributeError:
+        equity_usd = 0.01
+        daily_loss_percent = round(daily_loss_usd / equity_usd * 100, 3)
+        if profile.dailyLossLimitPercent > 0 and daily_loss_percent >= profile.dailyLossLimitPercent:
+            locked_until = datetime.combine(today + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc).isoformat()
+            lock_reason = f"{symbol} blocked: daily loss limit reached"
+        current = pair_state_store.get(symbol)
+        changes = {
+            "lossStreak": loss_streak,
+            "lastSlAt": latest_sl.time if latest_sl else None,
+            "lockedUntil": locked_until,
+            "lockReason": lock_reason,
+            "dailyLossUsd": round(daily_loss_usd, 2),
+            "dailyLossPercent": daily_loss_percent,
+            "dailyTradeCount": len(daily_entries),
+            "hourlyTradeCount": len(hourly_entries),
+            "lastProcessedCloseTime": pair_entries[-1].time if pair_entries else None,
+        }
+        if any(getattr(current, key) != value for key, value in changes.items()):
+            pair_state_store.update(symbol, **changes)
+
+
+@app.get("/api/pair-exposure", response_model=list[PairExposureStatus])
+def pair_exposure_status():
+    sync_pair_states_from_closed_trades()
+    return build_all_pair_exposure()
+
+
+def build_minimum_balance_estimate(current_equity_usd: float, force: bool = False) -> MinimumBalanceEstimate:
+    global minimum_balance_cache
+    symbols = active_scan_symbols()
+    now = datetime.now(timezone.utc)
+    if (
+        not force
+        and minimum_balance_cache is not None
+        and minimum_balance_cache[1] == symbols
+        and minimum_balance_cache[2] == auto_config.accountMode
+        and now - minimum_balance_cache[0] < timedelta(seconds=60)
+    ):
+        cached = minimum_balance_cache[3].model_copy(
+            update={
+                "currentEquityUsd": round(current_equity_usd, 2),
+                "sufficient": current_equity_usd >= minimum_balance_cache[3].recommendedUsd,
+            }
+        )
+        return cached
+
+    fallback_risk_usd: dict[Symbol, float] = {"XAUUSD": 30.0, "EURUSD": 3.0}
+    pair_estimates: list[MinimumBalancePair] = []
+    for symbol in symbols:
+        worst_risk = 0.0
+        source_timeframe: Timeframe | None = None
+        for timeframe in EXECUTION_TIMEFRAMES:
+            try:
+                snapshot = market_snapshot(symbol, timeframe)
+                signal = recommend(snapshot, RiskMode.FIXED_LOT, MIN_LOT[symbol])
+            except Exception:
+                continue
+            if signal.entry and signal.stopLoss:
+                candidate_risk = risk_usd_for(symbol, signal.entry, signal.stopLoss, MIN_LOT[symbol])
+                if candidate_risk > worst_risk:
+                    worst_risk = candidate_risk
+                    source_timeframe = timeframe
+        if worst_risk <= 0:
+            worst_risk = fallback_risk_usd[symbol]
+        required_equity = worst_risk / (MAX_RISK_PERCENT / 100)
+        pair_estimates.append(
+            MinimumBalancePair(
+                symbol=symbol,
+                riskAtMinLotUsd=round(worst_risk, 2),
+                requiredEquityUsd=round(required_equity, 2),
+                sourceTimeframe=source_timeframe,
+            )
+        )
+
+    minimum_usd = max((item.requiredEquityUsd for item in pair_estimates), default=0.0)
+    reserve_percent = 25.0
+    recommended_usd = math.ceil((minimum_usd * (1 + reserve_percent / 100)) / 100) * 100
+    factor = account_money_factor()
+    estimate = MinimumBalanceEstimate(
+        minimumUsd=round(minimum_usd, 2),
+        recommendedUsd=round(recommended_usd, 2),
+        minimumAccountUnits=round(minimum_usd * factor, 2),
+        recommendedAccountUnits=round(recommended_usd * factor, 2),
+        currentEquityUsd=round(current_equity_usd, 2),
+        sufficient=current_equity_usd >= recommended_usd,
+        reservePercent=reserve_percent,
+        minLot=0.01,
+        maxRiskPerPositionPercent=MAX_RISK_PERCENT,
+        pairs=pair_estimates,
+        message=(
+            "Recommended balance uses the widest current M15/M30/H1 strategy stop at 0.01 lot, "
+            "the 0.5% per-position risk guard, and a 25% operating reserve."
+        ),
+    )
+    minimum_balance_cache = (now, symbols, auto_config.accountMode, estimate)
+    return estimate
 
 
 def default_recovery_cycle(symbol: Symbol) -> RecoveryCycleStatus:
@@ -935,7 +1185,14 @@ def open_recovery_order(
     current_positions: list[OpenPosition],
     account_equity: float,
 ) -> tuple[bool, int | None, str]:
+    profile = pair_profile(symbol)
+    if not profile.recoveryEnabled:
+        return False, None, f"{symbol} recovery is disabled by pair profile."
+    state = pair_state_store.get(symbol)
+    if profile.closeOnly or state.closeOnlyMode:
+        return False, None, f"{symbol} recovery blocked: pair is CLOSE_ONLY."
     lot = round_down_lot(min(requested_lot, 0.10), 0.01)
+    lot = min(lot, profile.maxLot)
     if lot < 0.01:
         return False, None, "Recovery lot is below broker minimum."
     bid, ask, spread = bridge.tick(symbol)
@@ -985,7 +1242,30 @@ def open_recovery_order(
     )
     if candidate_exposure.blocked:
         return False, None, "; ".join(candidate_exposure.blockedReasons)
-    return bridge.send_order(request, fallback_lot=validation.lot)
+    lock = pair_exposure_locks[symbol]
+    if not lock.acquire(timeout=2):
+        return False, None, f"{symbol} blocked: exposure check lock unavailable"
+    try:
+        account = bridge.status() if hasattr(bridge, "status") else None
+        positions_snapshot = bridge.open_positions() if hasattr(bridge, "open_positions") else current_positions
+        pair_exposure = build_pair_exposure(
+            symbol,
+            profile,
+            state,
+            positions_snapshot,
+            bridge.pending_orders(),
+            usd_from_broker_money(account.balance) if account else account_equity,
+            usd_from_broker_money(account.equity) if account else account_equity,
+            (entry, stop_loss, validation.lot, side),
+            enforce_trade_limits=False,
+        )
+        if pair_exposure.status in {"BLOCKED", "CLOSE_ONLY", "LOCKED"}:
+            return False, None, "; ".join(pair_exposure.reasons) or f"{symbol} recovery blocked by exposure state."
+        if auto_config.shadowMode:
+            return False, None, "SHADOW PASS: recovery order not sent"
+        return bridge.send_order(request, fallback_lot=validation.lot)
+    finally:
+        lock.release()
 
 
 def process_recovery_engine() -> RecoveryEngineStatus:
@@ -1006,6 +1286,8 @@ def process_recovery_engine() -> RecoveryEngineStatus:
         state_changed = False
 
         for symbol in active_scan_symbols():
+            if not pair_profile(symbol).recoveryEnabled:
+                continue
             cycle = recovery_cycles.get(symbol)
             if cycle is None:
                 cycle = default_recovery_cycle(symbol)
@@ -1221,14 +1503,30 @@ def process_trailing_position(
     current_ask: float,
     config: dict[str, float],
 ) -> float | None:
+    current_price = current_bid if position.side == Side.BUY else current_ask
+    if "trigger_pips" in config:
+        profit_pips = (
+            (current_price - position.open_price) / config["pip_size"]
+            if position.side == Side.BUY
+            else (position.open_price - current_price) / config["pip_size"]
+        )
+        if profit_pips >= config.get("break_even_trigger_pips", config["trigger_pips"]):
+            lock_distance = config.get("break_even_lock_pips", 0.0) * config["pip_size"]
+            break_even_sl = position.open_price + lock_distance if position.side == Side.BUY else position.open_price - lock_distance
+            improves = break_even_sl > state.current_sl if position.side == Side.BUY else break_even_sl < state.current_sl
+            if improves and profit_pips < config["trigger_pips"]:
+                state.current_sl = break_even_sl
+                return break_even_sl
+        if profit_pips < config["trigger_pips"]:
+            return None
+
     if not state.trailing_active:
-        if position.profit >= config["trigger_usd"]:
+        if "trigger_pips" in config or position.profit >= config["trigger_usd"]:
             state.trailing_active = True
             state.peak_price = current_bid if position.side == Side.BUY else current_ask
         else:
             return None
 
-    current_price = current_bid if position.side == Side.BUY else current_ask
     if position.side == Side.BUY:
         if current_price > state.peak_price:
             state.peak_price = current_price
@@ -1297,6 +1595,17 @@ def process_trailing_positions() -> list[ClosePositionResult]:
             **base_config,
             "trigger_usd": broker_money_from_usd(base_config["trigger_usd"]),
         }
+        if position.symbol == "EURUSD":
+            profile = pair_profile("EURUSD")
+            config.update(
+                {
+                    "trigger_pips": profile.trailingTriggerPips,
+                    "break_even_trigger_pips": profile.trailingBreakEvenTriggerPips,
+                    "break_even_lock_pips": profile.trailingBreakEvenLockPips,
+                    "distance_pips": profile.trailingDistancePips,
+                    "step_pips": profile.trailingStepPips,
+                }
+            )
         state = get_or_create_trailing_state(position)
         last_attempt = trailing_last_attempts.get(position.ticket)
         if last_attempt is not None and now - last_attempt < timedelta(seconds=3):
@@ -1349,8 +1658,8 @@ def build_auto_trailing_status() -> AutoTrailingStatus:
         AutoTrailingRule(
             symbol=symbol,
             triggerUsd=auto_config.hardTakeProfitUsd.get(symbol, config["trigger_usd"]),
-            distancePips=config["distance_pips"],
-            stepPips=config["step_pips"],
+            distancePips=pair_profile(symbol).trailingDistancePips if symbol == "EURUSD" else config["distance_pips"],
+            stepPips=pair_profile(symbol).trailingStepPips if symbol == "EURUSD" else config["step_pips"],
             pipSize=config["pip_size"],
         )
         for symbol, config in TRAILING_CONFIG.items()
@@ -1426,6 +1735,7 @@ async def investing_sync_monitor() -> None:
 def run_auto_scan() -> AutoScanResponse:
     global auto_last_scan, auto_last_action, auto_blocked_reason
     auto_last_scan = datetime.now(timezone.utc).isoformat()
+    sync_pair_states_from_closed_trades()
     account = bridge.status()
     exposure = build_risk_exposure(
         bridge.open_positions(),
@@ -1438,6 +1748,9 @@ def run_auto_scan() -> AutoScanResponse:
 
     if not auto_config.enabled:
         auto_blocked_reason = "Auto mode is OFF"
+        return AutoScanResponse(status=build_auto_status(exposure), scanned=0, eligible=0, executed=0, blocked=[auto_blocked_reason], actions=[])
+    if pair_state_store.corrupt:
+        auto_blocked_reason = "AUTO blocked: pair state file corrupt"
         return AutoScanResponse(status=build_auto_status(exposure), scanned=0, eligible=0, executed=0, blocked=[auto_blocked_reason], actions=[])
     process_trailing_positions()
     if not account.connected:
@@ -1456,12 +1769,15 @@ def run_auto_scan() -> AutoScanResponse:
     candidates: list[tuple[OrderRecommendation, OrderValidation]] = []
     scanned = 0
     for symbol in active_scan_symbols():
+        profile = pair_profile(symbol)
         for timeframe in SCAN_TIMEFRAMES:
             scanned += 1
             snapshot = market_snapshot(symbol, timeframe)
-            signal = recommend(snapshot, auto_config.riskMode, auto_config.riskValue)
-            enrich_signal(snapshot, signal, auto_config.riskMode, auto_config.riskValue)
-            if timeframe not in EXECUTION_TIMEFRAMES:
+            profile_risk_value = profile.riskPercent if auto_config.riskMode == RiskMode.PERCENT_EQUITY else auto_config.riskValue
+            signal = recommend(snapshot, auto_config.riskMode, profile_risk_value)
+            enrich_signal(snapshot, signal, auto_config.riskMode, profile_risk_value)
+            apply_pair_risk_model(signal, profile, snapshot.candles)
+            if timeframe not in profile.executionTimeframes:
                 blocked.append(f"{symbol} {timeframe}: monitor trend only, excluded from auto execution")
                 continue
             if signal.score < auto_config.minScore:
@@ -1481,7 +1797,7 @@ def run_auto_scan() -> AutoScanResponse:
                     stopLoss=signal.stopLoss,
                     takeProfit=signal.takeProfit,
                     riskMode=auto_config.riskMode,
-                    riskValue=auto_config.riskValue,
+                    riskValue=profile_risk_value,
                 ),
                 equity=account_equity_usd(account),
                 spread_points=snapshot.spread_points,
@@ -1489,6 +1805,8 @@ def run_auto_scan() -> AutoScanResponse:
             if not validation.valid or validation.lot is None:
                 blocked.extend(f"{signal.symbol} {signal.timeframe}: {reason}" for reason in validation.blockedReasons)
                 continue
+            if validation.lot is not None:
+                validation.lot = min(validation.lot, profile.maxLot)
             candidates.append((signal, validation))
 
     candidates.sort(key=lambda item: item[0].score, reverse=True)
@@ -1496,41 +1814,119 @@ def run_auto_scan() -> AutoScanResponse:
     current_positions = bridge.open_positions()
     current_pending = bridge.pending_orders()
     for signal, validation in candidates:
+        if len(current_positions) >= auto_config.maxTotalOpenPositionsAllPairs:
+            blocked.append("AUTO blocked: maximum total open positions across all pairs reached")
+            break
         signature = build_auto_signature(signal)
         if is_auto_duplicate(signature):
             blocked.append(f"{signal.symbol} {signal.timeframe}: duplicate signal cooldown")
             continue
-        candidate_item = RiskExposureItem(
-            symbol=signal.symbol,
-            source="candidate",
-            entry=signal.entry or 0.0,
-            stopLoss=signal.stopLoss,
-            lot=validation.lot or 0.0,
-        )
-        candidate_exposure = build_risk_exposure(
-            current_positions,
-            current_pending,
-            equity=account_equity_usd(account),
-            max_total_risk_percent=auto_config.maxTotalRiskPercent,
-            candidate=candidate_item,
-        )
-        if candidate_exposure.blocked:
-            blocked.extend(f"{signal.symbol} {signal.timeframe}: {reason}" for reason in candidate_exposure.blockedReasons)
+        lock = pair_exposure_locks[signal.symbol]
+        acquired = lock.acquire(timeout=2)
+        if not acquired:
+            blocked.append(f"{signal.symbol} blocked: exposure check lock unavailable")
             continue
-        request = ExecuteOrderRequest(
-            symbol=signal.symbol,
-            timeframe=signal.timeframe,
-            side=signal.side,
-            orderType=signal.orderType,
-            entry=signal.entry,
-            stopLoss=signal.stopLoss,
-            takeProfit=signal.takeProfit,
-            riskMode=auto_config.riskMode,
-            riskValue=auto_config.riskValue,
-            lot=validation.lot,
-            confirmed=True,
-        )
-        accepted, ticket, message = bridge.send_order(request, fallback_lot=validation.lot)
+        try:
+            account_snapshot = bridge.status()
+            positions_snapshot = bridge.open_positions()
+            pending_snapshot = bridge.pending_orders()
+            candidate_item = RiskExposureItem(
+                symbol=signal.symbol,
+                source="candidate",
+                entry=signal.entry or 0.0,
+                stopLoss=signal.stopLoss,
+                lot=validation.lot or 0.0,
+            )
+            candidate_exposure = build_risk_exposure(
+                positions_snapshot,
+                pending_snapshot,
+                equity=account_equity_usd(account_snapshot),
+                max_total_risk_percent=auto_config.maxTotalRiskPercent,
+                candidate=candidate_item,
+            )
+            pair_exposure = build_pair_exposure(
+                signal.symbol,
+                pair_profile(signal.symbol),
+                pair_state_store.get(signal.symbol),
+                positions_snapshot,
+                pending_snapshot,
+                usd_from_broker_money(account_snapshot.balance),
+                usd_from_broker_money(account_snapshot.equity),
+                (signal.entry or 0.0, signal.stopLoss or 0.0, validation.lot or 0.0, signal.side),
+            )
+            snapshot = market_snapshot(signal.symbol, signal.timeframe)
+            gate = evaluate_pair_gate(
+                signal,
+                pair_profile(signal.symbol),
+                pair_exposure,
+                snapshot.candles,
+                snapshot.spread_points,
+                bridge.has_real_market_data(signal.symbol, signal.timeframe),
+                investing_current_status(signal.symbol),
+                investing_current_technical(signal.symbol),
+                load_calendar_events(),
+            )
+            gate_reasons = candidate_exposure.blockedReasons + pair_exposure.reasons + gate.reasons
+            audit_base = {
+                "symbol": signal.symbol,
+                "pairProfile": pair_profile(signal.symbol).model_dump(mode="json"),
+                "mode": "AUTO_SHADOW" if auto_config.shadowMode else "AUTO",
+                "side": signal.side.value if signal.side else None,
+                "timeframe": signal.timeframe,
+                "signalCandleTime": snapshot.candles[-2].time if len(snapshot.candles) >= 2 else None,
+                "signalGeneratedTime": auto_last_scan,
+                "internalScore": signal.score,
+                "internalReasons": signal.reasons,
+                "mt5SourceReal": bridge.has_real_market_data(signal.symbol, signal.timeframe),
+                "accountMode": auto_config.accountMode,
+                "balanceUsd": usd_from_broker_money(account_snapshot.balance),
+                "equityUsd": usd_from_broker_money(account_snapshot.equity),
+                "investingStatus": investing_current_status(signal.symbol),
+                "marketRegime": gate.regime,
+                "riskResult": candidate_exposure.model_dump(mode="json"),
+                "exposureResult": pair_exposure.model_dump(mode="json"),
+                "gateDecision": gate.decision,
+                "blockedReasons": list(dict.fromkeys(gate_reasons)),
+            }
+            if gate_reasons:
+                append_audit(SIGNAL_AUDIT_PATH, {**audit_base, "finalAction": "BLOCKED"})
+                blocked.extend(f"{signal.symbol} {signal.timeframe}: {reason}" for reason in gate_reasons)
+                if pair_exposure.tradeMode == "CLOSE_ONLY":
+                    pair_state_store.update(
+                        signal.symbol,
+                        closeOnlyMode=True,
+                        closeOnlyReason=gate_reasons[-1],
+                        aggregateSlExposurePercent=pair_exposure.aggregateSlRiskPercent,
+                    )
+                continue
+            request = ExecuteOrderRequest(
+                symbol=signal.symbol,
+                timeframe=signal.timeframe,
+                side=signal.side,
+                orderType=signal.orderType,
+                entry=signal.entry,
+                stopLoss=signal.stopLoss,
+                takeProfit=signal.takeProfit,
+                riskMode=auto_config.riskMode,
+                riskValue=pair_profile(signal.symbol).riskPercent if auto_config.riskMode == RiskMode.PERCENT_EQUITY else auto_config.riskValue,
+                lot=validation.lot,
+                confirmed=True,
+            )
+            if auto_config.shadowMode:
+                accepted, ticket, message = False, None, f"SHADOW PASS: {gate.decision}; order not sent"
+            else:
+                accepted, ticket, message = bridge.send_order(request, fallback_lot=validation.lot)
+            append_audit(
+                SIGNAL_AUDIT_PATH,
+                {
+                    **audit_base,
+                    "finalAction": "SHADOW_PASS" if auto_config.shadowMode else ("ORDER_SENT" if accepted else "SEND_BLOCKED"),
+                    "ticket": ticket,
+                    "message": message,
+                },
+            )
+        finally:
+            lock.release()
         add_history(signal.symbol, signal.timeframe, signal.score, f"AUTO_{signal.orderType.value}", "sent" if accepted else "blocked")
         actions.append(
             AutoExecutionItem(
@@ -1550,7 +1946,7 @@ def run_auto_scan() -> AutoScanResponse:
             auto_last_action = f"Auto sent {signal.orderType.value} {signal.symbol} {signal.timeframe} ticket {ticket}"
             current_positions = bridge.open_positions()
             current_pending = bridge.pending_orders()
-        else:
+        elif not message.startswith("SHADOW PASS"):
             blocked.append(f"{signal.symbol} {signal.timeframe}: {message}")
     if executed == 0 and not blocked:
         blocked.append("No eligible auto signal found")

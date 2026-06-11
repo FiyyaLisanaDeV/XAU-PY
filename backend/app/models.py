@@ -9,6 +9,9 @@ from pydantic import BaseModel, Field
 Symbol = Literal["XAUUSD", "EURUSD"]
 Timeframe = Literal["M15", "M30", "H1", "H4", "D1"]
 AccountMode = Literal["USD", "USC"]
+InvestingMode = Literal["advisory", "required", "disabled"]
+GateStrictness = Literal["advisory", "strict", "disabled"]
+LoggingLevel = Literal["normal", "verbose"]
 
 
 class Side(str, Enum):
@@ -259,6 +262,148 @@ class RiskExposure(BaseModel):
     items: list[RiskExposureItem]
 
 
+class MinimumBalancePair(BaseModel):
+    symbol: Symbol
+    riskAtMinLotUsd: float
+    requiredEquityUsd: float
+    sourceTimeframe: Timeframe | None = None
+
+
+class MinimumBalanceEstimate(BaseModel):
+    minimumUsd: float
+    recommendedUsd: float
+    minimumAccountUnits: float
+    recommendedAccountUnits: float
+    currentEquityUsd: float
+    sufficient: bool
+    reservePercent: float
+    minLot: float
+    maxRiskPerPositionPercent: float
+    pairs: list[MinimumBalancePair]
+    message: str
+
+
+class PairProfile(BaseModel):
+    enabled: bool = True
+    executionTimeframes: list[Timeframe] = Field(default_factory=lambda: ["M15", "M30", "H1"])
+    monitorTimeframes: list[Timeframe] = Field(default_factory=lambda: ["H4", "D1"])
+    maxSpread: float = Field(gt=0)
+    maxLot: float = Field(gt=0, le=0.10)
+    riskPercent: float = Field(gt=0, le=0.5)
+    minRiskReward: float = Field(default=1.3, ge=1.0, le=5.0)
+    investingMode: InvestingMode = "advisory"
+    pivotRequired: bool = False
+    marketFactGate: GateStrictness = "advisory"
+    mt5RealDataRequired: bool = True
+    recoveryEnabled: bool = True
+    cooldownAfterSlMinutes: int = Field(default=0, ge=0, le=1440)
+    lockAfterConsecutiveSl: int = Field(default=0, ge=0, le=20)
+    dailyLossLimitPercent: float = Field(default=0.0, ge=0, le=100)
+    newsFilterEnabled: bool = False
+    loggingLevel: LoggingLevel = "normal"
+    maxOpenPositions: int = Field(default=5, ge=0, le=100)
+    maxPendingOrders: int = Field(default=2, ge=0, le=100)
+    maxSameDirectionPositions: int = Field(default=3, ge=0, le=100)
+    maxOppositeDirectionPositions: int = Field(default=2, ge=0, le=100)
+    maxTotalLot: float = Field(default=0.50, ge=0, le=10)
+    maxFloatingLossUsd: float = Field(default=0.0, ge=0)
+    maxDailyTrades: int = Field(default=20, ge=0, le=1000)
+    maxHourlyTrades: int = Field(default=10, ge=0, le=1000)
+    aggregateSlRiskCapPercent: float = Field(default=15.0, ge=1, le=30)
+    closeOnly: bool = False
+    trailingBreakEvenTriggerPips: float = Field(default=5.0, ge=0)
+    trailingBreakEvenLockPips: float = Field(default=1.0, ge=0)
+    trailingTriggerPips: float = Field(default=8.0, ge=0)
+    trailingDistancePips: float = Field(default=4.0, gt=0)
+    trailingStepPips: float = Field(default=2.0, ge=0)
+    minStopPips: float = Field(default=0.0, ge=0)
+    maxStopPips: float = Field(default=0.0, ge=0)
+
+
+def default_pair_profiles() -> dict[Symbol, PairProfile]:
+    return {
+        "XAUUSD": PairProfile(
+            maxSpread=350.0,
+            maxLot=0.10,
+            riskPercent=0.5,
+            investingMode="advisory",
+            pivotRequired=False,
+            marketFactGate="advisory",
+            recoveryEnabled=True,
+            maxOpenPositions=5,
+            maxPendingOrders=2,
+            maxSameDirectionPositions=3,
+            maxOppositeDirectionPositions=2,
+            maxTotalLot=0.50,
+            maxDailyTrades=20,
+            maxHourlyTrades=10,
+            aggregateSlRiskCapPercent=15.0,
+        ),
+        "EURUSD": PairProfile(
+            maxSpread=18.0,
+            maxLot=0.05,
+            riskPercent=0.25,
+            minRiskReward=1.5,
+            investingMode="required",
+            pivotRequired=True,
+            marketFactGate="strict",
+            recoveryEnabled=False,
+            cooldownAfterSlMinutes=30,
+            lockAfterConsecutiveSl=2,
+            dailyLossLimitPercent=1.0,
+            newsFilterEnabled=True,
+            loggingLevel="verbose",
+            maxOpenPositions=1,
+            maxPendingOrders=0,
+            maxSameDirectionPositions=1,
+            maxOppositeDirectionPositions=0,
+            maxTotalLot=0.05,
+            maxDailyTrades=5,
+            maxHourlyTrades=2,
+            aggregateSlRiskCapPercent=5.0,
+            minStopPips=10.0,
+            maxStopPips=30.0,
+        ),
+    }
+
+
+class PairState(BaseModel):
+    symbol: Symbol
+    lossStreak: int = 0
+    lastSlAt: str | None = None
+    lockedUntil: str | None = None
+    lockReason: str | None = None
+    dailyLossUsd: float = 0.0
+    dailyLossPercent: float = 0.0
+    dailyTradeCount: int = 0
+    hourlyTradeCount: int = 0
+    closeOnlyMode: bool = False
+    closeOnlyReason: str | None = None
+    aggregateSlExposurePercent: float = 0.0
+    lastProcessedCloseTime: str | None = None
+    updatedAt: str | None = None
+    stateVersion: int = 1
+
+
+class PairExposureStatus(BaseModel):
+    symbol: Symbol
+    openPositions: int
+    maxOpenPositions: int
+    pendingOrders: int
+    maxPendingOrders: int
+    buyPositions: int
+    sellPositions: int
+    totalLot: float
+    maxTotalLot: float
+    floatingPnlAccount: float
+    aggregateSlRiskUsd: float
+    aggregateSlRiskPercent: float
+    aggregateSlRiskCapPercent: float
+    status: Literal["SAFE", "WARNING", "BLOCKED", "CLOSE_ONLY", "LOCKED"]
+    tradeMode: Literal["NORMAL", "CLOSE_ONLY", "LOCKED"]
+    reasons: list[str]
+
+
 class ClosePositionRequest(BaseModel):
     ticket: int | None = None
     symbol: Symbol | None = None
@@ -399,8 +544,11 @@ class SignalLogEntry(BaseModel):
 
 
 class AutoModeRequest(BaseModel):
+    configVersion: int = Field(default=2, ge=2)
+    shadowMode: bool = True
     enabled: bool
     accountMode: AccountMode = "USD"
+    pairProfiles: dict[Symbol, PairProfile] = Field(default_factory=default_pair_profiles)
     activeSymbols: list[Symbol] = Field(default_factory=lambda: ["XAUUSD", "EURUSD"])
     hardTakeProfitUsd: dict[Symbol, Annotated[float, Field(gt=0)]] = Field(default_factory=lambda: {"XAUUSD": 10.0, "EURUSD": 10.0})
     recoveryEnabled: bool = False
@@ -415,6 +563,7 @@ class AutoModeRequest(BaseModel):
     recoveryCooldownSeconds: int = Field(default=60, ge=15, le=3600)
     shockAtrMultiplier: float = Field(default=1.5, ge=1.0, le=5.0)
     maxTotalRiskPercent: float = Field(default=20.0, gt=0, le=100)
+    maxTotalOpenPositionsAllPairs: int = Field(default=15, ge=1, le=50)
     minScore: int = Field(default=60, ge=0, le=100)
     riskMode: RiskMode = RiskMode.PERCENT_EQUITY
     riskValue: float = Field(default=0.5, gt=0)
@@ -434,8 +583,11 @@ class AutoExecutionItem(BaseModel):
 
 
 class AutoModeStatus(BaseModel):
+    configVersion: int = 2
+    shadowMode: bool = True
     enabled: bool = False
     accountMode: AccountMode = "USD"
+    pairProfiles: dict[Symbol, PairProfile] = Field(default_factory=default_pair_profiles)
     activeSymbols: list[Symbol] = Field(default_factory=lambda: ["XAUUSD", "EURUSD"])
     hardTakeProfitUsd: dict[Symbol, Annotated[float, Field(gt=0)]] = Field(default_factory=lambda: {"XAUUSD": 10.0, "EURUSD": 10.0})
     recoveryEnabled: bool = False
@@ -450,6 +602,7 @@ class AutoModeStatus(BaseModel):
     recoveryCooldownSeconds: int = 60
     shockAtrMultiplier: float = 1.5
     maxTotalRiskPercent: float = 20.0
+    maxTotalOpenPositionsAllPairs: int = 15
     minScore: int = 60
     riskMode: RiskMode = RiskMode.PERCENT_EQUITY
     riskValue: float = 0.5
@@ -459,6 +612,8 @@ class AutoModeStatus(BaseModel):
     lastAction: str | None = None
     blockedReason: str | None = None
     exposure: RiskExposure
+    minimumBalance: MinimumBalanceEstimate
+    pairExposure: list[PairExposureStatus] = Field(default_factory=list)
 
 
 class AutoScanResponse(BaseModel):

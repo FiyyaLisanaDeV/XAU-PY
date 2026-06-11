@@ -321,6 +321,7 @@ def test_recovery_order_caps_lot_at_point_one(monkeypatch):
             return True, 200, "sent"
 
     monkeypatch.setattr(main_module, "bridge", FakeBridge())
+    monkeypatch.setattr(main_module.auto_config, "shadowMode", False)
 
     accepted, ticket, _message = main_module.open_recovery_order(
         "XAUUSD",

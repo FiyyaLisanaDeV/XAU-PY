@@ -88,8 +88,8 @@ def build_snapshot(symbol: Symbol, timeframe: Timeframe, candles: list[Candle], 
 
 
 def recommend(snapshot: MarketSnapshot, risk_mode: RiskMode = RiskMode.PERCENT_EQUITY, risk_value: float = 0.5) -> OrderRecommendation:
-    candles = snapshot.candles
-    indicators = snapshot.indicators
+    candles = snapshot.candles[:-1] if len(snapshot.candles) > 1 else snapshot.candles
+    indicators = build_indicators(candles)
     close = candles[-1].close
     ema_fast = indicators.ema_fast[-1]
     ema_slow = indicators.ema_slow[-1]
@@ -98,8 +98,9 @@ def recommend(snapshot: MarketSnapshot, risk_mode: RiskMode = RiskMode.PERCENT_E
     atr = average_range(candles[-14:])
     bullish = ema_fast > ema_slow and ma_fast > ma_slow
     bearish = ema_fast < ema_slow and ma_fast < ma_slow
-    near_zone = nearest_zone(close, snapshot.zones)
-    qm = has_quasimodo_shape(candles[-12:])
+    zones = detect_zones(candles)
+    near_zone = nearest_zone(close, zones)
+    qm_side = quasimodo_side(candles[-12:])
 
     reasons: list[str] = []
     score = 0
@@ -109,18 +110,17 @@ def recommend(snapshot: MarketSnapshot, risk_mode: RiskMode = RiskMode.PERCENT_E
         score += 24
         side = Side.BUY if bullish else Side.SELL
         reasons.append("EMA/MA trend alignment")
-    if near_zone is not None:
+    if near_zone is not None and zone_supports_side(near_zone, side):
         score += 18
         reasons.append(f"Price near {near_zone.kind} {near_zone.label}")
     if pullback_to_average(close, ema_fast, atr):
         score += 16
         reasons.append("Trend pullback near EMA")
-    if qm:
+    if qm_side is not None and qm_side == side:
         score += 12
-        reasons.append("Quasimodo swing structure detected")
-    if any(zone.kind == "FIB" and zone.low <= close <= zone.high for zone in snapshot.zones):
-        score += 14
-        reasons.append("Fibonacci retracement zone active")
+        reasons.append(f"{qm_side.value.title()} Quasimodo swing structure detected")
+    if any(zone.kind == "FIB" and zone.low <= close <= zone.high for zone in zones):
+        reasons.append("Internal Fibonacci context active; external pivot confirmation required")
     if candles[-1].close > candles[-1].open and side == Side.BUY:
         score += 8
         reasons.append("Bullish confirmation candle")
@@ -192,9 +192,28 @@ def pullback_to_average(price: float, average: float, atr: float) -> bool:
     return abs(price - average) <= atr * 0.75
 
 
-def has_quasimodo_shape(candles: list[Candle]) -> bool:
+def quasimodo_side(candles: list[Candle]) -> Side | None:
     if len(candles) < 6:
-        return False
+        return None
     highs = [c.high for c in candles]
     lows = [c.low for c in candles]
-    return highs[-5] < highs[-3] > highs[-1] and lows[-4] > lows[-2] or lows[-5] > lows[-3] < lows[-1] and highs[-4] < highs[-2]
+    bearish = highs[-5] < highs[-3] > highs[-1] and lows[-4] > lows[-2]
+    bullish = lows[-5] > lows[-3] < lows[-1] and highs[-4] < highs[-2]
+    if bullish == bearish:
+        return None
+    return Side.BUY if bullish else Side.SELL
+
+
+def has_quasimodo_shape(candles: list[Candle]) -> bool:
+    return quasimodo_side(candles) is not None
+
+
+def zone_supports_side(zone: Zone, side: Side | None) -> bool:
+    if side is None:
+        return False
+    label = zone.label.lower()
+    if "support" in label or "demand" in label:
+        return side == Side.BUY
+    if "resistance" in label or "supply" in label:
+        return side == Side.SELL
+    return False

@@ -505,12 +505,17 @@ def all_technicals() -> dict[str, Any]:
     return {"items": {symbol: current_technical(symbol) for symbol in INVESTING_URLS}}
 
 
-def apply_investing_filter(signal: OrderRecommendation) -> None:
+def apply_investing_filter(signal: OrderRecommendation, mode: str = "required") -> None:
     if signal.symbol not in INVESTING_URLS:
+        return
+    if mode == "disabled":
         return
     sync = current_status(signal.symbol).get("investing_data_sync", {})
     if sync.get("strategy_use") != "ALLOWED":
-        signal.blockedReasons.append("Investing.com data sync is not ALLOWED")
+        if mode == "required":
+            signal.blockedReasons.append("Investing.com data sync is not ALLOWED")
+        else:
+            signal.reasons.append("Investing.com advisory data is unavailable")
         return
     technical = current_technical(signal.symbol)
     investing_timeframe = INVESTING_TIMEFRAME_MAP.get(signal.timeframe, "1h")
@@ -520,6 +525,8 @@ def apply_investing_filter(signal: OrderRecommendation) -> None:
     if overall == "locked":
         overall = str(technical.get("summary", {}).get("overall", "neutral"))
     if signal.side == Side.BUY and overall in {"sell", "strong_sell"}:
-        signal.blockedReasons.append(f"Investing.com {investing_timeframe} technical filter conflicts with BUY ({overall})")
+        target = signal.blockedReasons if mode == "required" else signal.reasons
+        target.append(f"Investing.com {investing_timeframe} technical filter conflicts with BUY ({overall})")
     if signal.side == Side.SELL and overall in {"buy", "strong_buy"}:
-        signal.blockedReasons.append(f"Investing.com {investing_timeframe} technical filter conflicts with SELL ({overall})")
+        target = signal.blockedReasons if mode == "required" else signal.reasons
+        target.append(f"Investing.com {investing_timeframe} technical filter conflicts with SELL ({overall})")

@@ -157,6 +157,22 @@ class MT5Bridge:
         ask = bid + spread * point
         return round(bid, 5), round(ask, 5), spread
 
+    def has_real_market_data(self, symbol: Symbol, timeframe: Timeframe) -> bool:
+        if mt5 is None or not self.initialize():
+            return False
+        broker_symbol = self.resolve_symbol(symbol)
+        if broker_symbol is None:
+            return False
+        tick = mt5.symbol_info_tick(broker_symbol)
+        rates = mt5.copy_rates_from_pos(broker_symbol, self._map_timeframe(timeframe), 0, 3)
+        return bool(
+            tick is not None
+            and float(getattr(tick, "bid", 0.0)) > 0
+            and float(getattr(tick, "ask", 0.0)) > 0
+            and rates is not None
+            and len(rates) >= 3
+        )
+
     def resolve_symbol(self, symbol: Symbol) -> str | None:
         if mt5 is None or not self.initialize():
             return None

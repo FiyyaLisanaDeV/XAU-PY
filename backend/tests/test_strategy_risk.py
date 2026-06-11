@@ -376,6 +376,25 @@ def test_usc_mode_converts_ten_usd_hard_tp_to_one_thousand_usc(monkeypatch):
     assert main_module.usd_from_broker_money(98631.1) == 986.311
 
 
+def test_minimum_balance_estimate_uses_risk_guard_and_usc_conversion(monkeypatch):
+    monkeypatch.setattr(main_module.auto_config, "accountMode", "USC")
+    monkeypatch.setattr(main_module.auto_config, "activeSymbols", ["XAUUSD", "EURUSD"])
+    monkeypatch.setattr(main_module, "minimum_balance_cache", None)
+    monkeypatch.setattr(main_module, "market_snapshot", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("offline")))
+
+    estimate = main_module.build_minimum_balance_estimate(1000.0, force=True)
+
+    assert estimate.minimumUsd == 6000.0
+    assert estimate.recommendedUsd == 7500.0
+    assert estimate.minimumAccountUnits == 600000.0
+    assert estimate.recommendedAccountUnits == 750000.0
+    assert not estimate.sufficient
+    assert [(item.symbol, item.riskAtMinLotUsd) for item in estimate.pairs] == [
+        ("XAUUSD", 30.0),
+        ("EURUSD", 3.0),
+    ]
+
+
 def test_auto_trailing_sell_uses_ask_peak_and_original_sl_guard(monkeypatch):
     profitable = OpenPosition(
         ticket=21,
@@ -417,10 +436,10 @@ def test_auto_trailing_sell_uses_ask_peak_and_original_sl_guard(monkeypatch):
     results = main_module.process_trailing_positions()
 
     assert [item.ticket for item in results] == [21]
-    assert fake_bridge.modified == [(21, 1.099, 1.0940)]
+    assert fake_bridge.modified == [(21, 1.0974, 1.0940)]
     assert main_module.trailing_states[21].trailing_active
     assert main_module.trailing_states[21].peak_price == 1.0970
-    assert main_module.trailing_states[21].current_sl == 1.099
+    assert main_module.trailing_states[21].current_sl == 1.0974
     status = main_module.build_auto_trailing_status()
     assert status.enabled
     assert status.monitorIntervalSeconds == 1
@@ -428,7 +447,7 @@ def test_auto_trailing_sell_uses_ask_peak_and_original_sl_guard(monkeypatch):
     assert status.activeTickets == 1
     assert [rule.symbol for rule in status.rules] == ["XAUUSD", "EURUSD"]
     assert status.states[0].ticket == 21
-    assert status.states[0].currentStopLoss == 1.099
+    assert status.states[0].currentStopLoss == 1.0974
 
 
 def test_auto_trailing_skips_positions_without_stop_loss(monkeypatch):
