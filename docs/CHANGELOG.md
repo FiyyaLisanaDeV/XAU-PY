@@ -4,6 +4,7 @@
 
 ### Added
 
+- Refined the main application header into a compact service bar and scrollable primary navigation with clearer connection status and actions.
 - Added a per-pair Daily Trade Limit switch; disabling it keeps the counter visible but removes only the daily-count entry block.
 - Added Simple and Advanced Settings modes, including Conservative, Opportunistic, High Risk, and Custom configuration classification.
 - Added backend-authoritative profile normalization so Simple-mode presets cannot drift from their documented risk and strategy limits.

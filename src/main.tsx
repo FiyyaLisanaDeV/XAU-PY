@@ -14,7 +14,7 @@ import {
   type LineData,
   type UTCTimestamp
 } from "lightweight-charts";
-import { Activity, AlertTriangle, BookOpen, CheckCircle2, ChevronDown, Layers, Maximize2, Minimize2, PlugZap, ShieldCheck, TrendingUp, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, BookOpen, CheckCircle2, ChevronDown, Layers, Maximize2, Minimize2, PlugZap, RefreshCw, RotateCw, ShieldCheck, TrendingUp, XCircle } from "lucide-react";
 import "./styles.css";
 
 type SymbolName = "XAUUSD" | "EURUSD";
@@ -1110,23 +1110,43 @@ function App() {
   return (
     <main className="summary-shell">
       <header className="summary-header">
-        <div>
-          <span className="panel-title">Account summary</span>
-          <h1>XAUGBPEUUSD</h1>
+        <div className="summary-header-top">
+          <div className="summary-brand">
+            <span className="summary-brand-icon"><Activity size={20} /></span>
+            <div>
+              <h1>XAUGBPEUUSD</h1>
+              <span>Trading control center</span>
+            </div>
+          </div>
+          <div className="summary-status-row">
+            <div className="service-statuses">
+              <span className={backendHealth?.active ? "service-status ok" : "service-status danger"}>
+                <i />
+                Backend {backendHealth?.active ? "active" : "offline"}
+              </span>
+              <span className={status?.connected ? "service-status ok" : "service-status warn"}>
+                <i />
+                MT5 {status?.connected ? "connected" : "offline"}
+              </span>
+            </div>
+            <div className="service-actions">
+              <button className="header-action restart" title="Restart backend dan frontend" onClick={() => restartAllServices().catch((error) => setToast(error.message))}>
+                <RotateCw size={15} />
+                <span>Restart services</span>
+              </button>
+              <button className="header-action icon-only" title="Refresh data" aria-label="Refresh data" onClick={() => refresh().catch(() => undefined)}>
+                <RefreshCw size={16} />
+              </button>
+            </div>
+          </div>
         </div>
-        <nav className="summary-nav">
+        <nav className="summary-nav" aria-label="Main navigation">
           <button className={activePage === "summary" ? "active" : ""} onClick={() => setActivePage("summary")}>Summary</button>
           <button className={activePage === "system" ? "active" : ""} onClick={() => setActivePage("system")}>Strategy System</button>
           <button className={activePage === "settings" ? "active" : ""} onClick={() => setActivePage("settings")}>Settings</button>
           <button className={activePage === "guide" ? "active" : ""} onClick={() => setActivePage("guide")}>Penjelasan Setting</button>
           <button className={activePage === "investing" ? "active" : ""} onClick={() => setActivePage("investing")}>Investing</button>
         </nav>
-        <div className="summary-status-row">
-          <span className={backendHealth?.active ? "summary-pill ok" : "summary-pill danger"}>{backendHealth?.active ? "Backend active" : "Backend offline"}</span>
-          <span className={status?.connected ? "summary-pill ok" : "summary-pill warn"}>{status?.connected ? "MT5 connected" : "MT5 offline"}</span>
-          <button className="summary-refresh service-restart" onClick={() => restartAllServices().catch((error) => setToast(error.message))}>Restart all services</button>
-          <button className="summary-refresh" onClick={() => refresh().catch(() => undefined)}>Refresh</button>
-        </div>
       </header>
 
       {activePage === "system" ? (
