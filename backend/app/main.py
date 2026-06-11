@@ -825,6 +825,36 @@ def signal_log(limit: int = Query(100, ge=1, le=500)):
     return read_signal_log(limit=limit)
 
 
+@app.get("/api/signal-audit")
+def signal_audit(limit: int = Query(100, ge=1, le=500)):
+    if not SIGNAL_AUDIT_PATH.exists():
+        return []
+    records: list[dict] = []
+    try:
+        with SIGNAL_AUDIT_PATH.open("r", encoding="utf-8") as file:
+            for line in file:
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return []
+    return records[-limit:][::-1]
+
+
+@app.get("/api/pair-state")
+def pair_state_status():
+    sync_pair_states_from_closed_trades()
+    return {
+        "healthy": not pair_state_store.corrupt,
+        "error": pair_state_store.error,
+        "states": {
+            symbol: pair_state_store.get(symbol).model_dump(mode="json")
+            for symbol in SCAN_SYMBOLS
+        },
+    }
+
+
 def add_journal(entry: TradingJournalEntry) -> None:
     journal.append(entry)
 

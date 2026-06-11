@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added a live `Strategy System` parameter-check page covering runtime health, pair profiles, strategy components, risk limits, exposure, pair state, market data, confluence, signal logger, and decision audit.
 - Added config v2 pair profiles with automatic backup, atomic migration, rollback-safe shadow mode, and persistent pair state.
 - Added strict EURUSD Market Fact Gate, fresh Investing M15/M30/H1 validation, Fibonacci pivot guard, news guard, cooldown/loss locks, closed-candle confirmation, and signal expiry.
 - Added EURUSD 10-30 pip ATR stop clamp, 1.6R target, and configurable pip-based break-even/trailing.

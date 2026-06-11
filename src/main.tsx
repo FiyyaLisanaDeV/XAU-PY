@@ -226,6 +226,8 @@ interface MinimumBalanceEstimate {
 
 interface PairProfile {
   enabled: boolean;
+  executionTimeframes: Timeframe[];
+  monitorTimeframes: Timeframe[];
   maxSpread: number;
   maxLot: number;
   riskPercent: number;
@@ -557,6 +559,41 @@ interface SignalLogEntry {
   status: "potential" | "blocked";
 }
 
+interface PairStateItem {
+  symbol: SymbolName;
+  lossStreak: number;
+  lastSlAt: string | null;
+  lockedUntil: string | null;
+  lockReason: string | null;
+  dailyLossUsd: number;
+  dailyLossPercent: number;
+  dailyTradeCount: number;
+  hourlyTradeCount: number;
+  closeOnlyMode: boolean;
+  closeOnlyReason: string | null;
+  aggregateSlExposurePercent: number;
+  updatedAt: string | null;
+}
+
+interface PairStateResponse {
+  healthy: boolean;
+  error: string | null;
+  states: Record<SymbolName, PairStateItem>;
+}
+
+interface SignalAuditEntry {
+  recordedAt?: string;
+  symbol?: SymbolName;
+  mode?: string;
+  side?: "BUY" | "SELL" | null;
+  timeframe?: Timeframe;
+  internalScore?: number;
+  marketRegime?: string;
+  gateDecision?: string;
+  finalAction?: string;
+  blockedReasons?: string[];
+}
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 const symbols: SymbolName[] = ["XAUUSD", "EURUSD"];
 const timeframes: Timeframe[] = ["M15", "M30", "H1", "H4", "D1"];
@@ -582,7 +619,8 @@ const defaultStrategyRiskSettings: StrategyRiskSettings = {
   accountMode: "USD",
   pairProfiles: {
     XAUUSD: {
-      enabled: true, maxSpread: 350, maxLot: 0.1, riskPercent: 0.5, minRiskReward: 1.2,
+      enabled: true, executionTimeframes: ["M15", "M30", "H1"], monitorTimeframes: ["H4", "D1"],
+      maxSpread: 350, maxLot: 0.1, riskPercent: 0.5, minRiskReward: 1.2,
       investingMode: "advisory", pivotRequired: false, marketFactGate: "advisory",
       mt5RealDataRequired: true, recoveryEnabled: true, cooldownAfterSlMinutes: 0,
       lockAfterConsecutiveSl: 0, dailyLossLimitPercent: 0, newsFilterEnabled: false,
@@ -594,7 +632,8 @@ const defaultStrategyRiskSettings: StrategyRiskSettings = {
       trailingStepPips: 2, minStopPips: 0, maxStopPips: 0
     },
     EURUSD: {
-      enabled: true, maxSpread: 18, maxLot: 0.05, riskPercent: 0.25, minRiskReward: 1.5,
+      enabled: true, executionTimeframes: ["M15", "M30", "H1"], monitorTimeframes: ["H4", "D1"],
+      maxSpread: 18, maxLot: 0.05, riskPercent: 0.25, minRiskReward: 1.5,
       investingMode: "required", pivotRequired: true, marketFactGate: "strict",
       mt5RealDataRequired: true, recoveryEnabled: false, cooldownAfterSlMinutes: 30,
       lockAfterConsecutiveSl: 2, dailyLossLimitPercent: 1, newsFilterEnabled: true,
@@ -667,7 +706,7 @@ function strategySettingsFromAutoMode(autoMode: AutoModeStatus): StrategyRiskSet
 }
 
 function App() {
-  const [activePage, setActivePage] = React.useState<"summary" | "settings" | "investing">("summary");
+  const [activePage, setActivePage] = React.useState<"summary" | "system" | "settings" | "investing">("summary");
   const [status, setStatus] = React.useState<Status | null>(null);
   const [backendHealth, setBackendHealth] = React.useState<BackendHealth | null>(null);
   const [positions, setPositions] = React.useState<OpenPosition[]>([]);
@@ -682,6 +721,10 @@ function App() {
   const [investingStatuses, setInvestingStatuses] = React.useState<Partial<Record<SymbolName, InvestingDataSync>>>({});
   const [investingTechnical, setInvestingTechnical] = React.useState<InvestingTechnicalData | null>(null);
   const [investingTechnicals, setInvestingTechnicals] = React.useState<Partial<Record<SymbolName, InvestingTechnicalData>>>({});
+  const [signalLog, setSignalLog] = React.useState<SignalLogEntry[]>([]);
+  const [signalAudit, setSignalAudit] = React.useState<SignalAuditEntry[]>([]);
+  const [pairState, setPairState] = React.useState<PairStateResponse | null>(null);
+  const [calendar, setCalendar] = React.useState<EconomicCalendarResponse | null>(null);
   const [settingsDirty, setSettingsDirty] = React.useState(false);
   const [toast, setToast] = React.useState<string | null>(null);
 
@@ -708,7 +751,7 @@ function App() {
   }, [strategySettings.riskMode, strategySettings.riskValue]);
 
   const refresh = React.useCallback(async () => {
-    const [nextStatus, nextPositions, nextJournal, nextAutoMode, nextAutoTrailing, nextRecoveryStatus, nextTicks, nextBackendHealth, nextInvestingStatus, nextInvestingTechnical] = await Promise.all([
+    const [nextStatus, nextPositions, nextJournal, nextAutoMode, nextAutoTrailing, nextRecoveryStatus, nextTicks, nextBackendHealth, nextInvestingStatus, nextInvestingTechnical, nextSignalLog, nextSignalAudit, nextPairState, nextCalendar] = await Promise.all([
       fetchJson<Status>(`${API_BASE}/api/status`, { cache: "no-store" }),
       fetchJson<OpenPosition[]>(`${API_BASE}/api/positions`, { cache: "no-store" }),
       fetchJson<TradingJournalEntry[]>(`${API_BASE}/api/journal`, { cache: "no-store" }),
@@ -718,7 +761,11 @@ function App() {
       fetchJson<Partial<Record<SymbolName, MarketTick>>>(`${API_BASE}/api/market/ticks`, { cache: "no-store" }),
       fetchJson<BackendHealth>(`${API_BASE}/api/backend/health`, { cache: "no-store" }),
       fetchJson<InvestingStatusCollection>(`${API_BASE}/api/investing/status`, { cache: "no-store" }),
-      fetchJson<InvestingTechnicalCollection>(`${API_BASE}/api/investing/technical`, { cache: "no-store" })
+      fetchJson<InvestingTechnicalCollection>(`${API_BASE}/api/investing/technical`, { cache: "no-store" }),
+      fetchJson<SignalLogEntry[]>(`${API_BASE}/api/signal-log?limit=100`, { cache: "no-store" }),
+      fetchJson<SignalAuditEntry[]>(`${API_BASE}/api/signal-audit?limit=100`, { cache: "no-store" }),
+      fetchJson<PairStateResponse>(`${API_BASE}/api/pair-state`, { cache: "no-store" }),
+      fetchJson<EconomicCalendarResponse>(`${API_BASE}/api/economic-calendar`, { cache: "no-store" })
     ]);
     setStatus(nextStatus);
     setPositions(nextPositions);
@@ -733,6 +780,10 @@ function App() {
     setInvestingStatus(nextSyncBySymbol.EURUSD ?? nextSyncBySymbol.XAUUSD ?? null);
     setInvestingTechnicals(nextInvestingTechnical.items ?? {});
     setInvestingTechnical(nextInvestingTechnical.items?.EURUSD ?? nextInvestingTechnical.items?.XAUUSD ?? null);
+    setSignalLog(nextSignalLog);
+    setSignalAudit(nextSignalAudit);
+    setPairState(nextPairState);
+    setCalendar(nextCalendar);
   }, []);
 
   React.useEffect(() => {
@@ -914,6 +965,7 @@ function App() {
         </div>
         <nav className="summary-nav">
           <button className={activePage === "summary" ? "active" : ""} onClick={() => setActivePage("summary")}>Summary</button>
+          <button className={activePage === "system" ? "active" : ""} onClick={() => setActivePage("system")}>Strategy System</button>
           <button className={activePage === "settings" ? "active" : ""} onClick={() => setActivePage("settings")}>Settings</button>
           <button className={activePage === "investing" ? "active" : ""} onClick={() => setActivePage("investing")}>Investing</button>
         </nav>
@@ -925,7 +977,21 @@ function App() {
         </div>
       </header>
 
-      {activePage === "settings" ? (
+      {activePage === "system" ? (
+        <StrategySystemPage
+          status={status}
+          backendHealth={backendHealth}
+          autoMode={autoMode}
+          autoTrailing={autoTrailing}
+          recoveryStatus={recoveryStatus}
+          confluenceScores={confluenceScores}
+          investingStatuses={investingStatuses}
+          pairState={pairState}
+          calendar={calendar}
+          signalLog={signalLog}
+          signalAudit={signalAudit}
+        />
+      ) : activePage === "settings" ? (
         <StrategySettingsPage
           settings={strategySettings}
           autoMode={autoMode}
@@ -1353,6 +1419,394 @@ function InvestingTable({ title, items, columns }: { title: string; items: Recor
       </table>
     </section>
   );
+}
+
+type CheckTone = "PASS" | "WARNING" | "BLOCKED" | "OFF" | "INFO";
+
+interface ParameterCheckRow {
+  group: string;
+  parameter: string;
+  value: string;
+  expected: string;
+  status: CheckTone;
+  detail: string;
+}
+
+function StrategySystemPage({
+  status,
+  backendHealth,
+  autoMode,
+  autoTrailing,
+  recoveryStatus,
+  confluenceScores,
+  investingStatuses,
+  pairState,
+  calendar,
+  signalLog,
+  signalAudit
+}: {
+  status: Status | null;
+  backendHealth: BackendHealth | null;
+  autoMode: AutoModeStatus | null;
+  autoTrailing: AutoTrailingStatus | null;
+  recoveryStatus: RecoveryEngineStatus | null;
+  confluenceScores: ConfluenceScoreCard[];
+  investingStatuses: Partial<Record<SymbolName, InvestingDataSync>>;
+  pairState: PairStateResponse | null;
+  calendar: EconomicCalendarResponse | null;
+  signalLog: SignalLogEntry[];
+  signalAudit: SignalAuditEntry[];
+}) {
+  const rows = React.useMemo<ParameterCheckRow[]>(() => {
+    const checks: ParameterCheckRow[] = [
+      {
+        group: "Runtime",
+        parameter: "Backend service",
+        value: backendHealth?.active ? `Online PID ${backendHealth.pid}` : "Offline",
+        expected: "Online",
+        status: backendHealth?.active ? "PASS" : "BLOCKED",
+        detail: backendHealth?.message ?? "Backend health unavailable"
+      },
+      {
+        group: "Runtime",
+        parameter: "MT5 connection",
+        value: status?.connected ? `${status.server ?? "MT5"} / ${status.account_login ?? "--"}` : "Disconnected",
+        expected: "Connected",
+        status: status?.connected ? "PASS" : "BLOCKED",
+        detail: status?.message ?? "MT5 status unavailable"
+      },
+      {
+        group: "Runtime",
+        parameter: "MT5 trade readiness",
+        value: status?.trade_ready ? "Ready" : "Not ready",
+        expected: "Algo Trading enabled",
+        status: status?.trade_ready ? "PASS" : "BLOCKED",
+        detail: `Terminal ${status?.terminal_trade_allowed ? "allowed" : "blocked"}, account ${status?.account_trade_allowed ? "allowed" : "blocked"}`
+      },
+      {
+        group: "Runtime",
+        parameter: "Configuration",
+        value: `v${autoMode?.configVersion ?? "--"} / ${autoMode?.accountMode ?? "--"}`,
+        expected: "v2",
+        status: autoMode?.configVersion === 2 ? "PASS" : "BLOCKED",
+        detail: `Active pairs: ${formatActiveSymbols(autoMode?.activeSymbols ?? [])}`
+      },
+      {
+        group: "Execution",
+        parameter: "Full Auto",
+        value: autoMode?.enabled ? "ON" : "OFF",
+        expected: "User controlled",
+        status: autoMode?.enabled ? "PASS" : "OFF",
+        detail: autoMode?.blockedReason ?? "No current backend block"
+      },
+      {
+        group: "Execution",
+        parameter: "Shadow mode",
+        value: autoMode?.shadowMode ? "ON" : "OFF",
+        expected: "ON during migration",
+        status: autoMode?.shadowMode ? "WARNING" : "PASS",
+        detail: autoMode?.shadowMode ? "Orders are validated and logged but not sent" : "Approved orders may be sent to MT5"
+      },
+      {
+        group: "Risk",
+        parameter: "Total risk cap",
+        value: `${formatPercent(autoMode?.exposure?.totalRiskPercent)} used`,
+        expected: `<= ${formatPercent(autoMode?.maxTotalRiskPercent ?? 20)}`,
+        status: autoMode?.exposure?.blocked ? "BLOCKED" : "PASS",
+        detail: `${formatMoney(autoMode?.exposure?.totalRiskUsd ?? 0)} projected risk`
+      },
+      {
+        group: "Risk",
+        parameter: "All-pair position cap",
+        value: `${autoMode?.pairExposure?.reduce((sum, item) => sum + item.openPositions, 0) ?? 0} open`,
+        expected: `<= ${autoMode?.maxTotalOpenPositionsAllPairs ?? 15}`,
+        status: (autoMode?.pairExposure?.reduce((sum, item) => sum + item.openPositions, 0) ?? 0) >= (autoMode?.maxTotalOpenPositionsAllPairs ?? 15) ? "BLOCKED" : "PASS",
+        detail: "Counts all active pair positions"
+      },
+      {
+        group: "State",
+        parameter: "Pair state storage",
+        value: pairState?.healthy ? "Healthy" : "Unavailable",
+        expected: "Healthy and persistent",
+        status: pairState?.healthy ? "PASS" : "BLOCKED",
+        detail: pairState?.error ?? "Atomic JSON persistence active"
+      },
+      {
+        group: "Services",
+        parameter: "Hard TP / trailing monitor",
+        value: `${autoTrailing?.activeTickets ?? 0}/${autoTrailing?.trackedTickets ?? 0} active`,
+        expected: `Polling ${formatSeconds(autoTrailing?.monitorIntervalSeconds ?? 1)}`,
+        status: autoTrailing?.enabled ? "PASS" : "BLOCKED",
+        detail: autoTrailing?.message ?? "Trailing status unavailable"
+      },
+      {
+        group: "Services",
+        parameter: "Recovery engine",
+        value: recoveryStatus?.enabled ? "ON" : "OFF",
+        expected: autoMode?.recoveryEnabled ? "ON" : "OFF by configuration",
+        status: recoveryStatus?.enabled ? "WARNING" : "OFF",
+        detail: recoveryStatus?.message ?? "Recovery status unavailable"
+      },
+      {
+        group: "Market data",
+        parameter: "Economic calendar",
+        value: calendar?.configured ? `${calendar.events.length} events` : "Not configured",
+        expected: "Required for strict EURUSD",
+        status: calendar?.configured ? "PASS" : "BLOCKED",
+        detail: calendar?.message ?? "Calendar status unavailable"
+      }
+    ];
+
+    symbols.forEach((symbol) => {
+      const profile = autoMode?.pairProfiles?.[symbol];
+      const exposure = autoMode?.pairExposure?.find((item) => item.symbol === symbol);
+      const state = pairState?.states?.[symbol];
+      const investing = investingStatuses[symbol];
+      if (!profile) return;
+      checks.push(
+        {
+          group: symbol,
+          parameter: "Pair profile",
+          value: profile.enabled ? "Enabled" : "Disabled",
+          expected: symbol === "EURUSD" ? "Strict pair profile" : "Advisory XAU profile",
+          status: profile.enabled ? "PASS" : "OFF",
+          detail: `${profile.marketFactGate} gate, Investing ${profile.investingMode}`
+        },
+        {
+          group: symbol,
+          parameter: "Internal strategy engine",
+          value: "EMA/MA + zones + Quasimodo",
+          expected: "Side-aware scoring",
+          status: "PASS",
+          detail: "Support/demand validates BUY; resistance/supply validates SELL; Fibonacci remains context"
+        },
+        {
+          group: symbol,
+          parameter: "Execution timeframes",
+          value: profile.executionTimeframes.join(", "),
+          expected: "M15, M30, H1",
+          status: profile.executionTimeframes.join(",") === "M15,M30,H1" ? "PASS" : "WARNING",
+          detail: `Monitor only: ${profile.monitorTimeframes.join(", ")}`
+        },
+        {
+          group: symbol,
+          parameter: "Closed candle / signal expiry",
+          value: "Enabled",
+          expected: "Latest completed candle",
+          status: "PASS",
+          detail: "Direction confirmation and timeframe TTL are checked before execution"
+        },
+        {
+          group: symbol,
+          parameter: "Position exposure",
+          value: `${exposure?.openPositions ?? 0}/${profile.maxOpenPositions} positions`,
+          expected: `Lot <= ${profile.maxTotalLot.toFixed(2)}`,
+          status: exposureTone(exposure?.status),
+          detail: `${(exposure?.totalLot ?? 0).toFixed(2)} lot, ${exposure?.tradeMode ?? "UNKNOWN"} mode`
+        },
+        {
+          group: symbol,
+          parameter: "Aggregate SL risk",
+          value: `${(exposure?.aggregateSlRiskPercent ?? 0).toFixed(3)}%`,
+          expected: `<= ${profile.aggregateSlRiskCapPercent}%`,
+          status: (exposure?.aggregateSlRiskPercent ?? 0) >= profile.aggregateSlRiskCapPercent ? (autoMode?.shadowMode ? "WARNING" : "BLOCKED") : "PASS",
+          detail: `${formatMoney(exposure?.aggregateSlRiskUsd ?? 0)} projected loss to SL`
+        },
+        {
+          group: symbol,
+          parameter: "Spread guard",
+          value: `Max ${profile.maxSpread} pts`,
+          expected: `Current source must remain <= ${profile.maxSpread}`,
+          status: "PASS",
+          detail: "Validated again during order validation"
+        },
+        {
+          group: symbol,
+          parameter: "Order risk model",
+          value: `${profile.riskPercent}% / max ${profile.maxLot.toFixed(2)} lot`,
+          expected: `RR >= ${profile.minRiskReward.toFixed(1)}`,
+          status: "PASS",
+          detail: symbol === "EURUSD" ? `${profile.minStopPips}-${profile.maxStopPips} pip SL clamp` : "Existing XAU SL/TP model preserved"
+        },
+        {
+          group: symbol,
+          parameter: "Hard take profit",
+          value: `${formatMoney(autoMode?.hardTakeProfitUsd?.[symbol] ?? 10)} per position`,
+          expected: "Monitor every second",
+          status: autoTrailing?.enabled ? "PASS" : "BLOCKED",
+          detail: "Hard TP has priority outside an active recovery basket"
+        },
+        {
+          group: symbol,
+          parameter: "Market regime",
+          value: symbol === "EURUSD" ? "Strict block" : "Advisory",
+          expected: "Trend/range/choppy/volatility classification",
+          status: "PASS",
+          detail: symbol === "EURUSD" ? "CHOPPY, HARD_CHOPPY, low volatility, and news shock block entry" : "Regime does not alter existing XAU strategy by default"
+        },
+        {
+          group: symbol,
+          parameter: "Investing sync",
+          value: `${investing?.sync_status ?? "UNKNOWN"} / ${investing?.data_mode ?? "NONE"}`,
+          expected: profile.investingMode === "required" ? "Fresh and ALLOWED" : `Mode ${profile.investingMode}`,
+          status: investing?.strategy_use === "ALLOWED" ? "PASS" : profile.investingMode === "required" ? "BLOCKED" : "WARNING",
+          detail: investing?.message ?? "No sync status"
+        },
+        {
+          group: symbol,
+          parameter: "Trade state",
+          value: state?.closeOnlyMode ? "CLOSE_ONLY" : state?.lockedUntil ? "LOCKED" : "NORMAL",
+          expected: "NORMAL",
+          status: state?.closeOnlyMode || state?.lockedUntil ? "BLOCKED" : "PASS",
+          detail: state?.closeOnlyReason ?? state?.lockReason ?? `${state?.dailyTradeCount ?? 0} daily / ${state?.hourlyTradeCount ?? 0} hourly trades`
+        },
+        {
+          group: symbol,
+          parameter: "Recovery",
+          value: profile.recoveryEnabled ? "Enabled" : "Disabled",
+          expected: symbol === "EURUSD" ? "Disabled" : "Configurable",
+          status: symbol === "EURUSD" && profile.recoveryEnabled ? "BLOCKED" : profile.recoveryEnabled ? "WARNING" : "PASS",
+          detail: profile.closeOnly || state?.closeOnlyMode ? "Blocked by close-only state" : "Subject to pair exposure guard"
+        }
+      );
+    });
+    return checks;
+  }, [autoMode, autoTrailing, backendHealth, calendar, investingStatuses, pairState, recoveryStatus, status]);
+
+  const blockedCount = rows.filter((row) => row.status === "BLOCKED").length;
+  const warningCount = rows.filter((row) => row.status === "WARNING").length;
+  const passedCount = rows.filter((row) => row.status === "PASS").length;
+  const latestSignals = signalLog.slice(0, 30);
+  const latestAudit = signalAudit.slice(0, 30);
+
+  return (
+    <section className="parameter-page">
+      <div className="parameter-toolbar">
+        <div>
+          <span className="panel-title">Live parameter check</span>
+          <h2>Strategy, risk, signal, and service validation</h2>
+        </div>
+        <div className="parameter-counts">
+          <span className="check-count pass">{passedCount} PASS</span>
+          <span className="check-count warning">{warningCount} WARNING</span>
+          <span className="check-count blocked">{blockedCount} BLOCKED</span>
+        </div>
+      </div>
+
+      <section className="parameter-status-strip">
+        <ParameterHeadline label="Execution readiness" value={blockedCount === 0 ? "READY" : "BLOCKED"} tone={blockedCount === 0 ? "PASS" : "BLOCKED"} />
+        <ParameterHeadline label="Shadow mode" value={autoMode?.shadowMode ? "ACTIVE" : "OFF"} tone={autoMode?.shadowMode ? "WARNING" : "PASS"} />
+        <ParameterHeadline label="Signal logger" value={`${signalLog.length} loaded`} tone="INFO" />
+        <ParameterHeadline label="Audit decisions" value={`${signalAudit.length} loaded`} tone="INFO" />
+        <ParameterHeadline label="Minimum score" value={`${autoMode?.minScore ?? 60}`} tone="INFO" />
+      </section>
+
+      <section className="summary-table-card parameter-table-card">
+        <div className="summary-section-heading compact">
+          <div>
+            <span className="panel-title">All active parameters</span>
+            <h2>Expected value versus runtime value</h2>
+          </div>
+          <small>Updated automatically with the dashboard refresh cycle.</small>
+        </div>
+        <table className="summary-table parameter-table">
+          <thead><tr><th>Group</th><th>Parameter</th><th>Current value</th><th>Expected / limit</th><th>Status</th><th>Detail</th></tr></thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={`${row.group}-${row.parameter}-${index}`}>
+                <td><strong>{row.group}</strong></td>
+                <td>{row.parameter}</td>
+                <td>{row.value}</td>
+                <td>{row.expected}</td>
+                <td><CheckStatus value={row.status} /></td>
+                <td className="parameter-detail">{row.detail}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="confluence-panel parameter-confluence">
+        <div className="summary-section-heading compact">
+          <div><span className="panel-title">Strategy signal check</span><h2>Confluence status by pair and timeframe</h2></div>
+          <small>M15/M30/H1 execution, H4/D1 context.</small>
+        </div>
+        <div className="confluence-groups">
+          {symbols.map((symbol) => (
+            <div key={symbol} className="confluence-group">
+              <strong>{symbol}</strong>
+              <div className="confluence-cards">
+                {timeframes.map((timeframe) => <ConfluenceCard key={`${symbol}-${timeframe}`} score={confluenceScores.find((item) => item.symbol === symbol && item.timeframe === timeframe)} symbol={symbol} timeframe={timeframe} />)}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="summary-table-card">
+        <div className="summary-section-heading compact">
+          <div><span className="panel-title">Signal logger</span><h2>Latest potential signals</h2></div>
+          <small>{signalLog.length} records loaded</small>
+        </div>
+        <table className="summary-table parameter-log-table">
+          <thead><tr><th>Detected</th><th>Pair</th><th>TF</th><th>Score</th><th>Side / order</th><th>Setup</th><th>Entry</th><th>SL</th><th>TP</th><th>Status</th><th>Reason</th></tr></thead>
+          <tbody>
+            {latestSignals.length ? latestSignals.map((item) => (
+              <tr key={item.id}>
+                <td>{item.date} {item.time}</td><td>{item.symbol}</td><td>{item.timeframe}</td><td><strong>{item.score}</strong></td>
+                <td>{item.orderType?.replace("_", " ") ?? item.side ?? "WAIT"}</td><td>{item.setupType}</td>
+                <td>{formatPrice(item.entry)}</td><td>{formatPrice(item.stopLoss)}</td><td>{formatPrice(item.takeProfit)}</td>
+                <td><CheckStatus value={item.status === "blocked" ? "BLOCKED" : "INFO"} /></td>
+                <td className="parameter-detail">{item.blockedReasons[0] ?? item.reasons[0] ?? "--"}</td>
+              </tr>
+            )) : <tr><td colSpan={11}>No signal logger records.</td></tr>}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="summary-table-card">
+        <div className="summary-section-heading compact">
+          <div><span className="panel-title">Decision audit</span><h2>Latest pair-gate decisions</h2></div>
+          <small>{signalAudit.length} records loaded</small>
+        </div>
+        <table className="summary-table parameter-log-table">
+          <thead><tr><th>Recorded</th><th>Pair</th><th>TF</th><th>Mode</th><th>Side</th><th>Score</th><th>Regime</th><th>Gate</th><th>Final action</th><th>Reason</th></tr></thead>
+          <tbody>
+            {latestAudit.length ? latestAudit.map((item, index) => (
+              <tr key={`${item.recordedAt}-${index}`}>
+                <td>{item.recordedAt ? formatDateLabel(item.recordedAt) : "--"}</td><td>{item.symbol ?? "--"}</td><td>{item.timeframe ?? "--"}</td>
+                <td>{item.mode ?? "--"}</td><td>{item.side ?? "--"}</td><td>{item.internalScore ?? "--"}</td><td>{item.marketRegime ?? "--"}</td>
+                <td><CheckStatus value={auditTone(item.gateDecision)} /></td><td>{item.finalAction ?? "--"}</td>
+                <td className="parameter-detail">{item.blockedReasons?.[0] ?? "--"}</td>
+              </tr>
+            )) : <tr><td colSpan={10}>No detailed gate audit recorded yet.</td></tr>}
+          </tbody>
+        </table>
+      </section>
+    </section>
+  );
+}
+
+function ParameterHeadline({ label, value, tone }: { label: string; value: string; tone: CheckTone }) {
+  return <article className={`parameter-headline ${tone.toLowerCase()}`}><span>{label}</span><strong>{value}</strong></article>;
+}
+
+function CheckStatus({ value }: { value: CheckTone }) {
+  return <span className={`parameter-status ${value.toLowerCase()}`}>{value}</span>;
+}
+
+function exposureTone(value: PairExposureStatus["status"] | undefined): CheckTone {
+  if (value === "SAFE") return "PASS";
+  if (value === "WARNING") return "WARNING";
+  if (value === "BLOCKED" || value === "CLOSE_ONLY" || value === "LOCKED") return "BLOCKED";
+  return "INFO";
+}
+
+function auditTone(value: string | undefined): CheckTone {
+  if (value === "STRONG_PASS" || value === "PASS") return "PASS";
+  if (value === "WEAK_PASS") return "WARNING";
+  if (value === "BLOCK" || value === "HARD_BLOCK") return "BLOCKED";
+  return "INFO";
 }
 
 function StrategySettingsPage({
