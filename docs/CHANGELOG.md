@@ -4,6 +4,7 @@
 
 ### Added
 
+- Replaced the Summary-page Investing sync panel with an active profile, risk limits, H1 market regime, and pair-blocker overview.
 - Refined the main application header into a compact service bar and scrollable primary navigation with clearer connection status and actions.
 - Added a per-pair Daily Trade Limit switch; disabling it keeps the counter visible but removes only the daily-count entry block.
 - Added Simple and Advanced Settings modes, including Conservative, Opportunistic, High Risk, and Custom configuration classification.

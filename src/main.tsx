@@ -1221,7 +1221,7 @@ function App() {
         </div>
       </section>
 
-      <InvestingSyncCard sync={investingStatus} onSync={syncInvestingNow} />
+      <TradingProfileSummary autoMode={autoMode} marketRegimes={marketRegimes} />
 
       <section className="confluence-panel">
         <div className="summary-section-heading compact">
@@ -1369,6 +1369,53 @@ function SummaryMetric({ title, value, detail, tone }: { title: string; value: s
       <strong>{value}</strong>
       {detail ? <small>{detail}</small> : null}
     </article>
+  );
+}
+
+function TradingProfileSummary({ autoMode, marketRegimes }: { autoMode: AutoModeStatus | null; marketRegimes: MarketRegimeAssessment[] }) {
+  const profile = autoMode?.strategyProfile ?? "CUSTOM";
+  const profileLabel = profile === "CUSTOM" ? "Custom" : strategyProfileDescriptions[profile].title;
+  const executionMode = autoMode?.shadowMode ? "Shadow" : autoMode?.enabled ? "Live Auto" : "Auto Off";
+  const pairBlockers = (autoMode?.pairExposure ?? []).filter((item) => item.status !== "SAFE");
+  const h1Regimes = marketRegimes.filter((item) => item.timeframe === "H1");
+  return (
+    <section className="trading-profile-summary">
+      <div className="profile-summary-heading">
+        <div>
+          <span className="panel-title">Active trading configuration</span>
+          <h2>{profileLabel} profile</h2>
+          <p>Ringkasan parameter yang sedang digunakan backend untuk menilai dan membuka posisi.</p>
+        </div>
+        <span className={`profile-execution-state ${autoMode?.enabled ? (autoMode.shadowMode ? "shadow" : "live") : "off"}`}>{executionMode}</span>
+      </div>
+
+      <div className="profile-summary-metrics">
+        <Metric label="Active pairs" value={formatActiveSymbols(autoMode?.activeSymbols ?? [])} />
+        <Metric label="Total risk cap" value={formatPercent(autoMode?.maxTotalRiskPercent ?? 20)} />
+        <Metric label="Minimum score" value={`${autoMode?.minScore ?? 60}`} />
+        <Metric label="Position cap" value={`${autoMode?.maxTotalOpenPositionsAllPairs ?? 15}`} />
+      </div>
+
+      <div className="profile-summary-bottom">
+        <div className="profile-regime-list">
+          {h1Regimes.map((item) => (
+            <div key={item.symbol} className={marketRegimeTone(item.regime)}>
+              <span>{item.symbol} H1</span>
+              <strong>{item.regime.replace(/_/g, " ")}</strong>
+              <small>{item.confidence}% confidence</small>
+            </div>
+          ))}
+        </div>
+        <div className={pairBlockers.length ? "profile-blocker-summary blocked" : "profile-blocker-summary safe"}>
+          <strong>{pairBlockers.length ? `${pairBlockers.length} pair perlu perhatian` : "Semua pair siap"}</strong>
+          <span>
+            {pairBlockers.length
+              ? pairBlockers.map((item) => `${item.symbol}: ${item.reasons[0] ?? item.status}`).join(" · ")
+              : "Tidak ada exposure atau trade-state blocker aktif."}
+          </span>
+        </div>
+      </div>
+    </section>
   );
 }
 
