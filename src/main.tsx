@@ -1829,6 +1829,7 @@ function StrategySettingsPage({
   onReset: () => void;
 }) {
   const exposure = autoMode?.exposure;
+  const [activeSection, setActiveSection] = React.useState<"general" | "pairs" | "exits" | "recovery">("general");
   const updatePairProfile = (symbol: SymbolName, patch: Partial<PairProfile>) => {
     onChange({
       pairProfiles: {
@@ -1839,31 +1840,82 @@ function StrategySettingsPage({
   };
   return (
     <section className="settings-page">
-      <div className="summary-section-heading">
+      <div className="settings-page-header">
         <div>
           <span className="panel-title">Strategy & risk settings</span>
-          <h2>Cocokkan parameter auto strategy</h2>
+          <h2>Trading configuration</h2>
+          <p>Atur parameter global, profil pair, exit, dan recovery tanpa mengubah data runtime MT5.</p>
         </div>
-        <small>Perubahan aktif setelah Save settings.</small>
+        <div className="settings-header-status">
+          <span className={settings.enabled ? "settings-state on" : "settings-state off"}>AUTO {settings.enabled ? "ON" : "OFF"}</span>
+          <span className={settings.shadowMode ? "settings-state warning" : "settings-state on"}>{settings.shadowMode ? "SHADOW" : "LIVE EXECUTION"}</span>
+          <span className={settingsDirty ? "settings-state warning" : "settings-state on"}>{settingsDirty ? "UNSAVED" : "SYNCED"}</span>
+        </div>
       </div>
 
-      <div className="settings-layout">
-        <section className="settings-card">
+      <nav className="settings-section-nav" aria-label="Settings categories">
+        <button className={activeSection === "general" ? "active" : ""} onClick={() => setActiveSection("general")}>
+          <strong>General</strong>
+          <small>Automation, account, global risk</small>
+        </button>
+        <button className={activeSection === "pairs" ? "active" : ""} onClick={() => setActiveSection("pairs")}>
+          <strong>Pair Profiles</strong>
+          <small>XAUUSD and EURUSD limits</small>
+        </button>
+        <button className={activeSection === "exits" ? "active" : ""} onClick={() => setActiveSection("exits")}>
+          <strong>Exit & Trailing</strong>
+          <small>Hard TP and execution rules</small>
+        </button>
+        <button className={activeSection === "recovery" ? "active" : ""} onClick={() => setActiveSection("recovery")}>
+          <strong>Recovery</strong>
+          <small>Hedge, layers, basket exit</small>
+        </button>
+      </nav>
+
+      <div className="settings-context-bar">
+        <div>
+          <span>Active pairs</span>
+          <strong>{formatActiveSymbols(settings.activeSymbols)}</strong>
+        </div>
+        <div>
+          <span>Risk used</span>
+          <strong>{formatPercent(exposure?.totalRiskPercent)} / {formatPercent(positiveNumber(settings.maxTotalRiskPercent, 20))}</strong>
+        </div>
+        <div>
+          <span>Account</span>
+          <strong>{settings.accountMode}</strong>
+        </div>
+        <div>
+          <span>Minimum score</span>
+          <strong>{settings.minScore}</strong>
+        </div>
+      </div>
+
+      {activeSection === "general" && (
+      <div className="settings-layout settings-layout-general">
+        <section className="settings-card settings-card-primary">
           <div className="settings-card-heading">
-            <strong>Automation</strong>
+            <div>
+              <strong>Automation</strong>
+              <small>Kontrol scan dan izin eksekusi strategi.</small>
+            </div>
             <span className={settings.enabled ? "settings-state on" : "settings-state off"}>{settings.enabled ? "ON" : "OFF"}</span>
           </div>
-          <label className="settings-toggle">
-            <input type="checkbox" checked={settings.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} />
-            <span>Full Auto enabled</span>
-          </label>
-          <label className="settings-toggle">
-            <input type="checkbox" checked={settings.shadowMode} onChange={(event) => onChange({ shadowMode: event.target.checked })} />
-            <span>Shadow mode (validate and log, do not send orders)</span>
-          </label>
-          <SettingsNumber label="Minimum confluence score" value={settings.minScore} min={0} max={100} step={1} suffix="score" onChange={(value) => onChange({ minScore: value })} />
-          <SettingsNumber label="Scan interval" value={settings.scanIntervalSeconds} min={5} max={300} step={1} suffix="seconds" onChange={(value) => onChange({ scanIntervalSeconds: value })} />
-          <SettingsNumber label="Duplicate cooldown" value={settings.duplicateCooldownMinutes} min={0} max={1440} step={1} suffix="minutes" onChange={(value) => onChange({ duplicateCooldownMinutes: value })} />
+          <div className="settings-switch-list">
+            <label className="settings-switch">
+              <span><strong>Full Auto</strong><small>Jalankan scan strategy otomatis.</small></span>
+              <input type="checkbox" checked={settings.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} />
+            </label>
+            <label className="settings-switch">
+              <span><strong>Shadow Mode</strong><small>Validasi dan log tanpa mengirim order.</small></span>
+              <input type="checkbox" checked={settings.shadowMode} onChange={(event) => onChange({ shadowMode: event.target.checked })} />
+            </label>
+          </div>
+          <div className="settings-form-grid">
+            <SettingsNumber label="Minimum confluence score" value={settings.minScore} min={0} max={100} step={1} suffix="score" onChange={(value) => onChange({ minScore: value })} />
+            <SettingsNumber label="Scan interval" value={settings.scanIntervalSeconds} min={5} max={300} step={1} suffix="seconds" onChange={(value) => onChange({ scanIntervalSeconds: value })} />
+            <SettingsNumber label="Duplicate cooldown" value={settings.duplicateCooldownMinutes} min={0} max={1440} step={1} suffix="minutes" onChange={(value) => onChange({ duplicateCooldownMinutes: value })} />
+          </div>
           <div className="settings-field">
             <span>Active trade pairs</span>
             <div className="pair-toggle-grid">
@@ -1880,23 +1932,23 @@ function StrategySettingsPage({
                     }}
                   />
                   <span>{symbol}</span>
+                  <small>{settings.activeSymbols.includes(symbol) ? "Auto-entry active" : "Data only"}</small>
                 </label>
               ))}
             </div>
-            <small>Pair nonaktif tetap tampil di data, tetapi tidak boleh auto-entry.</small>
           </div>
         </section>
 
         <section className="settings-card">
           <div className="settings-card-heading">
-            <strong>Account Type</strong>
+            <div><strong>Account Type</strong><small>Normalisasi seluruh nilai uang.</small></div>
             <span className="settings-state on">{settings.accountMode}</span>
           </div>
           <div className="account-mode-grid">
             <label className={settings.accountMode === "USD" ? "account-mode-option active" : "account-mode-option"}>
               <input type="radio" name="account-mode" checked={settings.accountMode === "USD"} onChange={() => onChange({ accountMode: "USD" })} />
               <strong>Standard USD</strong>
-              <small>1 account unit = 1 USD</small>
+              <small>1 unit = 1 USD</small>
             </label>
             <label className={settings.accountMode === "USC" ? "account-mode-option active" : "account-mode-option"}>
               <input type="radio" name="account-mode" checked={settings.accountMode === "USC"} onChange={() => onChange({ accountMode: "USC" })} />
@@ -1904,12 +1956,12 @@ function StrategySettingsPage({
               <small>100 USC = 1 USD</small>
             </label>
           </div>
-          <small>Mode mengubah kalkulasi equity, P/L, Hard TP, hedge, dan basket target setelah Save settings.</small>
+          <p className="settings-help">Mengubah kalkulasi equity, P/L, Hard TP, hedge, basket target, dan minimum balance.</p>
         </section>
 
         <section className="settings-card">
           <div className="settings-card-heading">
-            <strong>Risk</strong>
+            <div><strong>Global Risk</strong><small>Batas risiko sebelum pair guard.</small></div>
             <span>{formatPercent(exposure?.totalRiskPercent)} used</span>
           </div>
           <label className="settings-field">
@@ -1920,32 +1972,42 @@ function StrategySettingsPage({
               <option value="fixed_usd">Fixed USD</option>
             </select>
           </label>
-          <SettingsNumber label="Risk value per order" value={settings.riskValue} min={0.01} step={0.01} suffix={riskModeSuffix(settings.riskMode)} onChange={(value) => onChange({ riskValue: value })} />
-          <SettingsNumber label="Total risk cap" value={settings.maxTotalRiskPercent} min={0.1} max={100} step={0.1} suffix="%" onChange={(value) => onChange({ maxTotalRiskPercent: value })} />
-          <SettingsNumber label="All-pair open position cap" value={settings.maxTotalOpenPositionsAllPairs} min={1} max={50} step={1} suffix="positions" onChange={(value) => onChange({ maxTotalOpenPositionsAllPairs: value })} />
+          <div className="settings-form-grid">
+            <SettingsNumber label="Risk value per order" value={settings.riskValue} min={0.01} step={0.01} suffix={riskModeSuffix(settings.riskMode)} onChange={(value) => onChange({ riskValue: value })} />
+            <SettingsNumber label="Total risk cap" value={settings.maxTotalRiskPercent} min={0.1} max={100} step={0.1} suffix="%" onChange={(value) => onChange({ maxTotalRiskPercent: value })} />
+            <SettingsNumber label="All-pair position cap" value={settings.maxTotalOpenPositionsAllPairs} min={1} max={50} step={1} suffix="positions" onChange={(value) => onChange({ maxTotalOpenPositionsAllPairs: value })} />
+          </div>
           <div className="settings-risk-preview">
-            <Metric label="Total risk" value={`${formatPercent(exposure?.totalRiskPercent)} / ${formatPercent(autoMode?.maxTotalRiskPercent ?? 20)}`} />
+            <Metric label="Projected risk" value={formatPercent(exposure?.totalRiskPercent)} />
             <Metric label="Available" value={formatPercent(exposure?.availableRiskPercent)} />
-            <Metric label="Account mode" value={settings.accountMode} />
+            <Metric label="Risk USD" value={formatMoney(exposure?.totalRiskUsd ?? 0)} />
           </div>
         </section>
 
         <MinimumBalanceCard estimate={autoMode?.minimumBalance ?? null} accountMode={settings.accountMode} />
+      </div>
+      )}
 
-        {symbols.map((symbol) => (
-          <PairProfileCard
-            key={symbol}
-            symbol={symbol}
-            profile={settings.pairProfiles[symbol]}
-            exposure={autoMode?.pairExposure?.find((item) => item.symbol === symbol) ?? null}
-            onChange={(patch) => updatePairProfile(symbol, patch)}
-          />
-        ))}
+      {activeSection === "pairs" && (
+        <div className="settings-pair-layout">
+          {symbols.map((symbol) => (
+            <PairProfileCard
+              key={symbol}
+              symbol={symbol}
+              profile={settings.pairProfiles[symbol]}
+              exposure={autoMode?.pairExposure?.find((item) => item.symbol === symbol) ?? null}
+              onChange={(patch) => updatePairProfile(symbol, patch)}
+            />
+          ))}
+        </div>
+      )}
 
+      {activeSection === "exits" && (
+      <div className="settings-layout settings-layout-exits">
         <section className="settings-card">
           <div className="settings-card-heading">
-            <strong>Hard Take Profit</strong>
-            <span>USD per position</span>
+            <div><strong>Hard Take Profit</strong><small>Target close otomatis per posisi.</small></div>
+            <span>USD equivalent</span>
           </div>
           <SettingsNumber
             label="XAUUSD Hard TP"
@@ -1969,14 +2031,44 @@ function StrategySettingsPage({
           </div>
         </section>
 
+        <section className="settings-card settings-guide">
+          <div className="settings-card-heading">
+            <div><strong>Execution Rules</strong><small>Aturan tetap yang digunakan engine.</small></div>
+            <span>{settingsDirty ? "Unsaved" : "Synced"}</span>
+          </div>
+          <div className="settings-rule-list">
+            <span><strong>M15, M30, H1</strong> execution timeframe</span>
+            <span><strong>H4, D1</strong> monitor/context only</span>
+            <span><strong>0.10 lot</strong> maximum per position</span>
+            <span><strong>{settings.accountMode}</strong> account normalization</span>
+            <span><strong>{formatActiveSymbols(settings.activeSymbols)}</strong> active auto-entry pairs</span>
+          </div>
+        </section>
+
+        <section className="settings-card settings-exit-summary">
+          <div className="settings-card-heading">
+            <div><strong>Exit Summary</strong><small>Nilai efektif setelah Save.</small></div>
+          </div>
+          <div className="settings-risk-preview">
+            <Metric label="XAUUSD Hard TP" value={formatMoney(positiveNumber(settings.xauusdHardTpUsd, 10))} />
+            <Metric label="EURUSD Hard TP" value={formatMoney(positiveNumber(settings.eurusdHardTpUsd, 10))} />
+            <Metric label="Trailing monitor" value="1 second" />
+          </div>
+          <p className="settings-help">EURUSD trailing pip diatur pada Pair Profiles. XAUUSD tetap memakai trailing khusus gold.</p>
+        </section>
+      </div>
+      )}
+
+      {activeSection === "recovery" && (
+      <div className="settings-layout settings-layout-recovery">
         <section className="settings-card">
           <div className="settings-card-heading">
-            <strong>Hedge Recovery</strong>
+            <div><strong>Hedge Recovery</strong><small>Aktifkan hanya setelah exposure diperiksa.</small></div>
             <span className={settings.recoveryEnabled ? "settings-state on" : "settings-state off"}>{settings.recoveryEnabled ? "ON" : "OFF"}</span>
           </div>
-          <label className="settings-toggle">
+          <label className="settings-switch">
+            <span><strong>Bounded hedge recovery</strong><small>Tetap tunduk pada pair exposure dan Shadow Mode.</small></span>
             <input type="checkbox" checked={settings.recoveryEnabled} onChange={(event) => onChange({ recoveryEnabled: event.target.checked })} />
-            <span>Enable bounded hedge recovery</span>
           </label>
           <SettingsNumber label="Reversal hedge trigger" value={settings.reversalHedgeScore} min={50} max={100} step={1} suffix="score" onChange={(value) => onChange({ reversalHedgeScore: value })} />
           <SettingsNumber label="Recovery resume maximum" value={settings.recoveryResumeScore} min={0} max={74} step={1} suffix="score" onChange={(value) => onChange({ recoveryResumeScore: value })} />
@@ -1987,7 +2079,7 @@ function StrategySettingsPage({
 
         <section className="settings-card">
           <div className="settings-card-heading">
-            <strong>Hedge & Recovery Entry</strong>
+            <div><strong>Recovery Entry</strong><small>Ukuran hedge dan recovery layer.</small></div>
             <span>Bounded sizing</span>
           </div>
           <SettingsNumber label="XAUUSD hedge profit target" value={settings.xauusdHedgeProfitUsd} min={0.01} step={0.01} suffix="USD" onChange={(value) => onChange({ xauusdHedgeProfitUsd: value })} />
@@ -2003,8 +2095,8 @@ function StrategySettingsPage({
 
         <section className="settings-card">
           <div className="settings-card-heading">
-            <strong>Basket Exit</strong>
-            <span>USD per pair cycle</span>
+            <div><strong>Basket Exit</strong><small>Target dan emergency cap per siklus.</small></div>
+            <span>USD equivalent</span>
           </div>
           <SettingsNumber label="XAUUSD basket target" value={settings.xauusdBasketTargetUsd} min={0.01} step={0.01} suffix="USD" onChange={(value) => onChange({ xauusdBasketTargetUsd: value })} />
           <SettingsNumber label="EURUSD basket target" value={settings.eurusdBasketTargetUsd} min={0.01} step={0.01} suffix="USD" onChange={(value) => onChange({ eurusdBasketTargetUsd: value })} />
@@ -2012,28 +2104,31 @@ function StrategySettingsPage({
           <SettingsNumber label="EURUSD emergency loss cap" value={settings.eurusdBasketMaxLossUsd} min={0.01} step={0.01} suffix="USD" onChange={(value) => onChange({ eurusdBasketMaxLossUsd: value })} />
         </section>
 
-        <section className="settings-card settings-guide">
+        <section className="settings-card settings-guide settings-recovery-summary">
           <div className="settings-card-heading">
-            <strong>Execution rules</strong>
+            <div><strong>Recovery Summary</strong><small>Konfigurasi efektif saat ini.</small></div>
             <span>{settingsDirty ? "Unsaved" : "Synced"}</span>
           </div>
           <div className="settings-rule-list">
-            <span>M15, M30, H1 = execution timeframe</span>
-            <span>H4, D1 = monitor/context only</span>
-            <span>Lot max per position tetap 0.10</span>
-            <span>Account mode: {settings.accountMode} ({settings.accountMode === "USC" ? "100 USC = 1 USD" : "standard USD"})</span>
-            <span>Recovery: {settings.recoveryEnabled ? "ON" : "OFF"}, hedge {clampNumber(settings.hedgeRatioPercent, 10, 70, 50).toFixed(0)}%, max {Math.round(clampNumber(settings.maxRecoveryLayers, 0, 2, 2))} layer</span>
-            <span>Basket exit menghitung P/L main + hedge + recovery per pair</span>
-            <span>XAUUSD Hard TP: {formatMoney(positiveNumber(settings.xauusdHardTpUsd, 10))}</span>
-            <span>EURUSD Hard TP: {formatMoney(positiveNumber(settings.eurusdHardTpUsd, 10))}</span>
-            <span>Pair aktif auto-entry: {formatActiveSymbols(settings.activeSymbols)}</span>
+            <span><strong>{settings.recoveryEnabled ? "ON" : "OFF"}</strong> global recovery</span>
+            <span><strong>{clampNumber(settings.hedgeRatioPercent, 10, 70, 50).toFixed(0)}%</strong> hedge ratio</span>
+            <span><strong>{Math.round(clampNumber(settings.maxRecoveryLayers, 0, 2, 2))}</strong> maximum layers</span>
+            <span><strong>{clampNumber(settings.recoveryMultiplier, 1, 1.5, 1.35).toFixed(2)}x</strong> lot multiplier</span>
+            <span><strong>EURUSD OFF</strong> by strict pair profile default</span>
           </div>
         </section>
       </div>
+      )}
 
-      <div className="settings-actions">
-        <button className="summary-refresh" onClick={onSave}>Save settings</button>
-        <button className="settings-secondary" onClick={onReset}>Reset form</button>
+      <div className="settings-actions settings-actions-sticky">
+        <div>
+          <strong>{settingsDirty ? "Unsaved changes" : "Settings synchronized"}</strong>
+          <small>{settingsDirty ? "Review lalu simpan agar parameter aktif di backend." : "Nilai form sama dengan konfigurasi backend."}</small>
+        </div>
+        <div>
+          <button className="settings-secondary" onClick={onReset} disabled={!settingsDirty}>Discard changes</button>
+          <button className="summary-refresh" onClick={onSave} disabled={!settingsDirty}>Save settings</button>
+        </div>
       </div>
     </section>
   );
@@ -2052,52 +2147,84 @@ function PairProfileCard({
 }) {
   return (
     <section className="settings-card pair-profile-card">
-      <div className="settings-card-heading">
-        <strong>{symbol} Pair Profile</strong>
-        <span className={`exposure-state ${exposure?.status?.toLowerCase() ?? "blocked"}`}>{exposure?.status ?? "NO DATA"}</span>
-      </div>
-      <div className="settings-toggle-row">
-        <label className="settings-toggle"><input type="checkbox" checked={profile.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} /><span>Pair enabled</span></label>
-        <label className="settings-toggle"><input type="checkbox" checked={profile.closeOnly} onChange={(event) => onChange({ closeOnly: event.target.checked })} /><span>Close-only</span></label>
-        <label className="settings-toggle"><input type="checkbox" checked={profile.recoveryEnabled} onChange={(event) => onChange({ recoveryEnabled: event.target.checked })} /><span>Recovery</span></label>
-        <label className="settings-toggle"><input type="checkbox" checked={profile.pivotRequired} onChange={(event) => onChange({ pivotRequired: event.target.checked })} /><span>Pivot required</span></label>
-        <label className="settings-toggle"><input type="checkbox" checked={profile.newsFilterEnabled} onChange={(event) => onChange({ newsFilterEnabled: event.target.checked })} /><span>News filter</span></label>
-      </div>
-      <label className="settings-field"><span>Investing mode</span><select value={profile.investingMode} onChange={(event) => onChange({ investingMode: event.target.value as PairProfile["investingMode"] })}><option value="advisory">Advisory</option><option value="required">Required</option><option value="disabled">Disabled</option></select></label>
-      <label className="settings-field"><span>Market Fact Gate</span><select value={profile.marketFactGate} onChange={(event) => onChange({ marketFactGate: event.target.value as PairProfile["marketFactGate"] })}><option value="advisory">Advisory</option><option value="strict">Strict</option><option value="disabled">Disabled</option></select></label>
-      <div className="pair-profile-grid">
-        <CompactNumber label="Risk" value={profile.riskPercent} min={0.01} max={0.5} step={0.01} suffix="%" onChange={(value) => onChange({ riskPercent: value })} />
-        <CompactNumber label="Max lot" value={profile.maxLot} min={0.01} max={0.1} step={0.01} suffix="lot" onChange={(value) => onChange({ maxLot: value })} />
-        <CompactNumber label="Min RR" value={profile.minRiskReward} min={1} max={5} step={0.1} suffix="R" onChange={(value) => onChange({ minRiskReward: value })} />
-        <CompactNumber label="Max spread" value={profile.maxSpread} min={1} max={1000} step={1} suffix="pts" onChange={(value) => onChange({ maxSpread: value })} />
-        <CompactNumber label="Open positions" value={profile.maxOpenPositions} min={1} max={20} step={1} suffix="max" onChange={(value) => onChange({ maxOpenPositions: value })} />
-        <CompactNumber label="Pending orders" value={profile.maxPendingOrders} min={0} max={20} step={1} suffix="max" onChange={(value) => onChange({ maxPendingOrders: value })} />
-        <CompactNumber label="Max total lot" value={profile.maxTotalLot} min={0.01} max={2} step={0.01} suffix="lot" onChange={(value) => onChange({ maxTotalLot: value })} />
-        <CompactNumber label="Aggregate SL cap" value={profile.aggregateSlRiskCapPercent} min={1} max={30} step={0.5} suffix="%" onChange={(value) => onChange({ aggregateSlRiskCapPercent: value })} />
-        <CompactNumber label="Daily trades" value={profile.maxDailyTrades} min={0} max={100} step={1} suffix="max" onChange={(value) => onChange({ maxDailyTrades: value })} />
-        <CompactNumber label="Hourly trades" value={profile.maxHourlyTrades} min={0} max={20} step={1} suffix="max" onChange={(value) => onChange({ maxHourlyTrades: value })} />
-        <CompactNumber label="SL cooldown" value={profile.cooldownAfterSlMinutes} min={0} max={1440} step={1} suffix="min" onChange={(value) => onChange({ cooldownAfterSlMinutes: value })} />
-        <CompactNumber label="Loss-streak lock" value={profile.lockAfterConsecutiveSl} min={0} max={10} step={1} suffix="SL" onChange={(value) => onChange({ lockAfterConsecutiveSl: value })} />
-      </div>
-      {symbol === "EURUSD" && (
-        <div className="pair-profile-grid">
-          <CompactNumber label="Break-even trigger" value={profile.trailingBreakEvenTriggerPips} min={0} max={100} step={1} suffix="pips" onChange={(value) => onChange({ trailingBreakEvenTriggerPips: value })} />
-          <CompactNumber label="Break-even lock" value={profile.trailingBreakEvenLockPips} min={0} max={100} step={1} suffix="pips" onChange={(value) => onChange({ trailingBreakEvenLockPips: value })} />
-          <CompactNumber label="Trailing trigger" value={profile.trailingTriggerPips} min={0} max={100} step={1} suffix="pips" onChange={(value) => onChange({ trailingTriggerPips: value })} />
-          <CompactNumber label="Trailing distance" value={profile.trailingDistancePips} min={1} max={100} step={1} suffix="pips" onChange={(value) => onChange({ trailingDistancePips: value })} />
-          <CompactNumber label="Trailing step" value={profile.trailingStepPips} min={1} max={100} step={1} suffix="pips" onChange={(value) => onChange({ trailingStepPips: value })} />
-          <CompactNumber label="Daily loss limit" value={profile.dailyLossLimitPercent} min={0} max={20} step={0.1} suffix="%" onChange={(value) => onChange({ dailyLossLimitPercent: value })} />
+      <div className="pair-profile-heading">
+        <div>
+          <span className="panel-title">Pair profile</span>
+          <h3>{symbol}</h3>
+          <small>{symbol === "EURUSD" ? "Strict fail-closed execution profile" : "Flexible gold profile with aggregate exposure guard"}</small>
         </div>
-      )}
-      <div className="settings-risk-preview">
+        <div className="pair-profile-status">
+          <span className={`exposure-state ${exposure?.status?.toLowerCase() ?? "blocked"}`}>{exposure?.status ?? "NO DATA"}</span>
+          <small>{exposure?.tradeMode ?? "UNKNOWN"}</small>
+        </div>
+      </div>
+
+      <div className="pair-exposure-strip">
         <Metric label="Open" value={`${exposure?.openPositions ?? 0} / ${profile.maxOpenPositions}`} />
-        <Metric label="Pending" value={`${exposure?.pendingOrders ?? 0} / ${profile.maxPendingOrders}`} />
         <Metric label="Total lot" value={`${(exposure?.totalLot ?? 0).toFixed(2)} / ${profile.maxTotalLot.toFixed(2)}`} />
         <Metric label="SL exposure" value={`${(exposure?.aggregateSlRiskPercent ?? 0).toFixed(2)}% / ${profile.aggregateSlRiskCapPercent}%`} />
         <Metric label="Floating P/L" value={formatMoney(exposure?.floatingPnlAccount ?? 0)} />
-        <Metric label="Trade mode" value={exposure?.tradeMode ?? "UNKNOWN"} />
       </div>
-      {(exposure?.reasons ?? []).slice(0, 3).map((reason) => <small key={reason} className="pair-exposure-reason">{reason}</small>)}
+
+      <div className="pair-profile-section">
+        <div className="pair-profile-section-heading"><strong>Permissions & market gates</strong><small>Kontrol biner dan sumber konfirmasi.</small></div>
+        <div className="settings-toggle-row">
+          <label className="settings-switch compact"><span><strong>Pair enabled</strong></span><input type="checkbox" checked={profile.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} /></label>
+          <label className="settings-switch compact danger"><span><strong>Close-only</strong></span><input type="checkbox" checked={profile.closeOnly} onChange={(event) => onChange({ closeOnly: event.target.checked })} /></label>
+          <label className="settings-switch compact"><span><strong>Recovery</strong></span><input type="checkbox" checked={profile.recoveryEnabled} onChange={(event) => onChange({ recoveryEnabled: event.target.checked })} /></label>
+          <label className="settings-switch compact"><span><strong>Pivot required</strong></span><input type="checkbox" checked={profile.pivotRequired} onChange={(event) => onChange({ pivotRequired: event.target.checked })} /></label>
+          <label className="settings-switch compact"><span><strong>News filter</strong></span><input type="checkbox" checked={profile.newsFilterEnabled} onChange={(event) => onChange({ newsFilterEnabled: event.target.checked })} /></label>
+        </div>
+        <div className="settings-form-grid two">
+          <label className="settings-field"><span>Investing mode</span><select value={profile.investingMode} onChange={(event) => onChange({ investingMode: event.target.value as PairProfile["investingMode"] })}><option value="advisory">Advisory</option><option value="required">Required</option><option value="disabled">Disabled</option></select></label>
+          <label className="settings-field"><span>Market Fact Gate</span><select value={profile.marketFactGate} onChange={(event) => onChange({ marketFactGate: event.target.value as PairProfile["marketFactGate"] })}><option value="advisory">Advisory</option><option value="strict">Strict</option><option value="disabled">Disabled</option></select></label>
+        </div>
+      </div>
+
+      <div className="pair-profile-section">
+        <div className="pair-profile-section-heading"><strong>Risk & exposure limits</strong><small>Order sizing dan batas akumulasi pair.</small></div>
+        <div className="pair-profile-grid">
+          <CompactNumber label="Risk per trade" value={profile.riskPercent} min={0.01} max={0.5} step={0.01} suffix="%" onChange={(value) => onChange({ riskPercent: value })} />
+          <CompactNumber label="Maximum lot" value={profile.maxLot} min={0.01} max={0.1} step={0.01} suffix="lot" onChange={(value) => onChange({ maxLot: value })} />
+          <CompactNumber label="Minimum RR" value={profile.minRiskReward} min={1} max={5} step={0.1} suffix="R" onChange={(value) => onChange({ minRiskReward: value })} />
+          <CompactNumber label="Maximum spread" value={profile.maxSpread} min={1} max={1000} step={1} suffix="pts" onChange={(value) => onChange({ maxSpread: value })} />
+          <CompactNumber label="Open positions" value={profile.maxOpenPositions} min={1} max={20} step={1} suffix="max" onChange={(value) => onChange({ maxOpenPositions: value })} />
+          <CompactNumber label="Pending orders" value={profile.maxPendingOrders} min={0} max={20} step={1} suffix="max" onChange={(value) => onChange({ maxPendingOrders: value })} />
+          <CompactNumber label="Maximum total lot" value={profile.maxTotalLot} min={0.01} max={2} step={0.01} suffix="lot" onChange={(value) => onChange({ maxTotalLot: value })} />
+          <CompactNumber label="Aggregate SL cap" value={profile.aggregateSlRiskCapPercent} min={1} max={30} step={0.5} suffix="%" onChange={(value) => onChange({ aggregateSlRiskCapPercent: value })} />
+        </div>
+      </div>
+
+      <div className="pair-profile-section">
+        <div className="pair-profile-section-heading"><strong>Frequency & lock controls</strong><small>Mencegah overtrade dan loss streak.</small></div>
+        <div className="pair-profile-grid">
+          <CompactNumber label="Daily trades" value={profile.maxDailyTrades} min={0} max={100} step={1} suffix="max" onChange={(value) => onChange({ maxDailyTrades: value })} />
+          <CompactNumber label="Hourly trades" value={profile.maxHourlyTrades} min={0} max={20} step={1} suffix="max" onChange={(value) => onChange({ maxHourlyTrades: value })} />
+          <CompactNumber label="SL cooldown" value={profile.cooldownAfterSlMinutes} min={0} max={1440} step={1} suffix="min" onChange={(value) => onChange({ cooldownAfterSlMinutes: value })} />
+          <CompactNumber label="Loss-streak lock" value={profile.lockAfterConsecutiveSl} min={0} max={10} step={1} suffix="SL" onChange={(value) => onChange({ lockAfterConsecutiveSl: value })} />
+        </div>
+      </div>
+
+      {symbol === "EURUSD" && (
+        <div className="pair-profile-section">
+          <div className="pair-profile-section-heading"><strong>EURUSD trailing & daily guard</strong><small>Pip-based protection khusus EURUSD.</small></div>
+          <div className="pair-profile-grid">
+            <CompactNumber label="Break-even trigger" value={profile.trailingBreakEvenTriggerPips} min={0} max={100} step={1} suffix="pips" onChange={(value) => onChange({ trailingBreakEvenTriggerPips: value })} />
+            <CompactNumber label="Break-even lock" value={profile.trailingBreakEvenLockPips} min={0} max={100} step={1} suffix="pips" onChange={(value) => onChange({ trailingBreakEvenLockPips: value })} />
+            <CompactNumber label="Trailing trigger" value={profile.trailingTriggerPips} min={0} max={100} step={1} suffix="pips" onChange={(value) => onChange({ trailingTriggerPips: value })} />
+            <CompactNumber label="Trailing distance" value={profile.trailingDistancePips} min={1} max={100} step={1} suffix="pips" onChange={(value) => onChange({ trailingDistancePips: value })} />
+            <CompactNumber label="Trailing step" value={profile.trailingStepPips} min={1} max={100} step={1} suffix="pips" onChange={(value) => onChange({ trailingStepPips: value })} />
+            <CompactNumber label="Daily loss limit" value={profile.dailyLossLimitPercent} min={0} max={20} step={0.1} suffix="%" onChange={(value) => onChange({ dailyLossLimitPercent: value })} />
+          </div>
+        </div>
+      )}
+
+      {(exposure?.reasons ?? []).length > 0 && (
+        <div className="pair-exposure-alert">
+          <strong>Current blockers</strong>
+          {(exposure?.reasons ?? []).slice(0, 4).map((reason) => <span key={reason}>{reason}</span>)}
+        </div>
+      )}
     </section>
   );
 }
