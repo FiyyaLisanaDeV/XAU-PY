@@ -182,6 +182,58 @@ The backend does not use native MT5 trailing. It polls positions, stores state p
 
 The UI reads `GET /api/auto-trailing/status` to show how many tickets are tracked, how many have active trailing, and which rules are currently used for each pair.
 
+## Bounded Martingale Hedge Recovery
+
+This feature is optional and defaults to `OFF`. It only runs when both Full Auto and Hedge Recovery are enabled.
+
+```mermaid
+flowchart TD
+  A[NORMAL] -->|M15 and M30 reversal score reaches trigger| B[Open partial opposite hedge]
+  B --> C{Hedge profit target reached?}
+  C -- yes --> D[Close hedge]
+  D --> E[WAIT RECOVERY]
+  E -->|Original direction confirms and reversal score fades| F[Open bounded same-direction recovery]
+  F --> G{Combined basket P/L}
+  G -->|Target reached| H[Close complete pair basket]
+  G -->|Maximum loss reached| I[Emergency close complete pair basket]
+  F -->|Reversal returns| B
+```
+
+Reversal score uses completed M15 and M30 candles only. It checks:
+
+- Opposing candle direction.
+- Shock candle body relative to recent average range.
+- EMA21 cross.
+- EMA21/EMA55 reversal alignment.
+- Recent structure break.
+- Volume expansion.
+- Agreement between M15 and M30.
+
+Recovery entry requires the original direction to return, price to close beyond EMA21, and the completed candle to break the previous candle high/low in the original direction.
+
+Default limits:
+
+| Setting | XAUUSD | EURUSD |
+| --- | ---: | ---: |
+| Hedge profit target | `$10` | `$10` |
+| Basket profit target | `$15` | `$10` |
+| Emergency basket loss | `$100` | `$50` |
+
+Shared defaults:
+
+| Setting | Value |
+| --- | ---: |
+| Reversal hedge score | `75` |
+| Recovery resume maximum score | `45` |
+| Partial hedge ratio | `50%` |
+| Recovery multiplier | `1.35x` |
+| Maximum recovery layers | `2` |
+| Cooldown between actions | `60 seconds` |
+| Shock candle threshold | `1.5 ATR` |
+| Lot cap per position | `0.10` |
+
+The martingale component is intentionally bounded. It cannot multiply indefinitely, and every candidate must still pass normal spread, SL/TP, per-order risk, and `20%` total exposure validation. During an active recovery cycle, individual hard TP and trailing actions are paused for that pair so the basket is not split unintentionally.
+
 ## Practical Reading Guide
 
 When a trade is not opening, read blockers in this order:

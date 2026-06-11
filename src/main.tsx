@@ -208,6 +208,17 @@ interface AutoModeStatus {
   enabled: boolean;
   activeSymbols: SymbolName[];
   hardTakeProfitUsd: Record<SymbolName, number>;
+  recoveryEnabled: boolean;
+  reversalHedgeScore: number;
+  recoveryResumeScore: number;
+  hedgeRatio: number;
+  hedgeProfitUsd: Record<SymbolName, number>;
+  recoveryMultiplier: number;
+  maxRecoveryLayers: number;
+  basketTargetUsd: Record<SymbolName, number>;
+  basketMaxLossUsd: Record<SymbolName, number>;
+  recoveryCooldownSeconds: number;
+  shockAtrMultiplier: number;
   maxTotalRiskPercent: number;
   minScore: number;
   riskMode: RiskMode;
@@ -218,6 +229,29 @@ interface AutoModeStatus {
   lastAction: string | null;
   blockedReason: string | null;
   exposure: RiskExposure;
+}
+
+interface RecoveryCycleStatus {
+  symbol: SymbolName;
+  phase: "NORMAL" | "HEDGE_ACTIVE" | "WAIT_RECOVERY" | "RECOVERY_ACTIVE" | "BASKET_EXIT" | "EMERGENCY_EXIT";
+  mainSide: "BUY" | "SELL" | null;
+  reversalScore: number;
+  recoveryLayers: number;
+  realizedHedgeProfit: number;
+  openBasketProfit: number;
+  basketProfit: number;
+  mainTickets: number[];
+  hedgeTickets: number[];
+  recoveryTickets: number[];
+  lastAction: string | null;
+  updatedAt: string | null;
+}
+
+interface RecoveryEngineStatus {
+  enabled: boolean;
+  monitorIntervalSeconds: number;
+  cycles: RecoveryCycleStatus[];
+  message: string;
 }
 
 interface AutoTrailingRule {
@@ -292,6 +326,20 @@ interface StrategyRiskSettings {
   activeSymbols: SymbolName[];
   xauusdHardTpUsd: string;
   eurusdHardTpUsd: string;
+  recoveryEnabled: boolean;
+  reversalHedgeScore: string;
+  recoveryResumeScore: string;
+  hedgeRatioPercent: string;
+  xauusdHedgeProfitUsd: string;
+  eurusdHedgeProfitUsd: string;
+  recoveryMultiplier: string;
+  maxRecoveryLayers: string;
+  xauusdBasketTargetUsd: string;
+  eurusdBasketTargetUsd: string;
+  xauusdBasketMaxLossUsd: string;
+  eurusdBasketMaxLossUsd: string;
+  recoveryCooldownSeconds: string;
+  shockAtrMultiplier: string;
   maxTotalRiskPercent: string;
   minScore: string;
   riskMode: RiskMode;
@@ -446,6 +494,20 @@ const defaultStrategyRiskSettings: StrategyRiskSettings = {
   activeSymbols: ["XAUUSD", "EURUSD"],
   xauusdHardTpUsd: "10",
   eurusdHardTpUsd: "10",
+  recoveryEnabled: false,
+  reversalHedgeScore: "75",
+  recoveryResumeScore: "45",
+  hedgeRatioPercent: "50",
+  xauusdHedgeProfitUsd: "10",
+  eurusdHedgeProfitUsd: "10",
+  recoveryMultiplier: "1.35",
+  maxRecoveryLayers: "2",
+  xauusdBasketTargetUsd: "15",
+  eurusdBasketTargetUsd: "10",
+  xauusdBasketMaxLossUsd: "100",
+  eurusdBasketMaxLossUsd: "50",
+  recoveryCooldownSeconds: "60",
+  shockAtrMultiplier: "1.5",
   maxTotalRiskPercent: "20",
   minScore: "60",
   riskMode: "percent_equity",
@@ -453,6 +515,35 @@ const defaultStrategyRiskSettings: StrategyRiskSettings = {
   scanIntervalSeconds: "15",
   duplicateCooldownMinutes: "10"
 };
+
+function strategySettingsFromAutoMode(autoMode: AutoModeStatus): StrategyRiskSettings {
+  return {
+    enabled: autoMode.enabled,
+    activeSymbols: autoMode.activeSymbols ?? ["XAUUSD", "EURUSD"],
+    xauusdHardTpUsd: String(autoMode.hardTakeProfitUsd?.XAUUSD ?? 10),
+    eurusdHardTpUsd: String(autoMode.hardTakeProfitUsd?.EURUSD ?? 10),
+    recoveryEnabled: autoMode.recoveryEnabled ?? false,
+    reversalHedgeScore: String(autoMode.reversalHedgeScore ?? 75),
+    recoveryResumeScore: String(autoMode.recoveryResumeScore ?? 45),
+    hedgeRatioPercent: String((autoMode.hedgeRatio ?? 0.5) * 100),
+    xauusdHedgeProfitUsd: String(autoMode.hedgeProfitUsd?.XAUUSD ?? 10),
+    eurusdHedgeProfitUsd: String(autoMode.hedgeProfitUsd?.EURUSD ?? 10),
+    recoveryMultiplier: String(autoMode.recoveryMultiplier ?? 1.35),
+    maxRecoveryLayers: String(autoMode.maxRecoveryLayers ?? 2),
+    xauusdBasketTargetUsd: String(autoMode.basketTargetUsd?.XAUUSD ?? 15),
+    eurusdBasketTargetUsd: String(autoMode.basketTargetUsd?.EURUSD ?? 10),
+    xauusdBasketMaxLossUsd: String(autoMode.basketMaxLossUsd?.XAUUSD ?? 100),
+    eurusdBasketMaxLossUsd: String(autoMode.basketMaxLossUsd?.EURUSD ?? 50),
+    recoveryCooldownSeconds: String(autoMode.recoveryCooldownSeconds ?? 60),
+    shockAtrMultiplier: String(autoMode.shockAtrMultiplier ?? 1.5),
+    maxTotalRiskPercent: String(autoMode.maxTotalRiskPercent),
+    minScore: String(autoMode.minScore),
+    riskMode: autoMode.riskMode,
+    riskValue: String(autoMode.riskValue),
+    scanIntervalSeconds: String(autoMode.scanIntervalSeconds),
+    duplicateCooldownMinutes: String(autoMode.duplicateCooldownMinutes)
+  };
+}
 
 function App() {
   const [activePage, setActivePage] = React.useState<"summary" | "settings" | "investing">("summary");
@@ -462,6 +553,7 @@ function App() {
   const [journal, setJournal] = React.useState<TradingJournalEntry[]>([]);
   const [autoMode, setAutoMode] = React.useState<AutoModeStatus | null>(null);
   const [autoTrailing, setAutoTrailing] = React.useState<AutoTrailingStatus | null>(null);
+  const [recoveryStatus, setRecoveryStatus] = React.useState<RecoveryEngineStatus | null>(null);
   const [ticks, setTicks] = React.useState<Partial<Record<SymbolName, MarketTick>>>({});
   const [confluenceScores, setConfluenceScores] = React.useState<ConfluenceScoreCard[]>([]);
   const [strategySettings, setStrategySettings] = React.useState<StrategyRiskSettings>(defaultStrategyRiskSettings);
@@ -495,12 +587,13 @@ function App() {
   }, [strategySettings.riskMode, strategySettings.riskValue]);
 
   const refresh = React.useCallback(async () => {
-    const [nextStatus, nextPositions, nextJournal, nextAutoMode, nextAutoTrailing, nextTicks, nextBackendHealth, nextInvestingStatus, nextInvestingTechnical] = await Promise.all([
+    const [nextStatus, nextPositions, nextJournal, nextAutoMode, nextAutoTrailing, nextRecoveryStatus, nextTicks, nextBackendHealth, nextInvestingStatus, nextInvestingTechnical] = await Promise.all([
       fetchJson<Status>(`${API_BASE}/api/status`, { cache: "no-store" }),
       fetchJson<OpenPosition[]>(`${API_BASE}/api/positions`, { cache: "no-store" }),
       fetchJson<TradingJournalEntry[]>(`${API_BASE}/api/journal`, { cache: "no-store" }),
       fetchJson<AutoModeStatus>(`${API_BASE}/api/auto-mode/status`, { cache: "no-store" }),
       fetchJson<AutoTrailingStatus>(`${API_BASE}/api/auto-trailing/status`, { cache: "no-store" }),
+      fetchJson<RecoveryEngineStatus>(`${API_BASE}/api/recovery/status`, { cache: "no-store" }),
       fetchJson<Partial<Record<SymbolName, MarketTick>>>(`${API_BASE}/api/market/ticks`, { cache: "no-store" }),
       fetchJson<BackendHealth>(`${API_BASE}/api/backend/health`, { cache: "no-store" }),
       fetchJson<InvestingStatusCollection>(`${API_BASE}/api/investing/status`, { cache: "no-store" }),
@@ -511,6 +604,7 @@ function App() {
     setJournal(nextJournal);
     setAutoMode(nextAutoMode);
     setAutoTrailing(nextAutoTrailing);
+    setRecoveryStatus(nextRecoveryStatus);
     setTicks(nextTicks);
     setBackendHealth(nextBackendHealth);
     const nextSyncBySymbol = normalizeInvestingStatuses(nextInvestingStatus);
@@ -538,18 +632,7 @@ function App() {
 
   React.useEffect(() => {
     if (!autoMode || settingsDirty) return;
-    setStrategySettings({
-      enabled: autoMode.enabled,
-      activeSymbols: autoMode.activeSymbols ?? ["XAUUSD", "EURUSD"],
-      xauusdHardTpUsd: String(autoMode.hardTakeProfitUsd?.XAUUSD ?? 10),
-      eurusdHardTpUsd: String(autoMode.hardTakeProfitUsd?.EURUSD ?? 10),
-      maxTotalRiskPercent: String(autoMode.maxTotalRiskPercent),
-      minScore: String(autoMode.minScore),
-      riskMode: autoMode.riskMode,
-      riskValue: String(autoMode.riskValue),
-      scanIntervalSeconds: String(autoMode.scanIntervalSeconds),
-      duplicateCooldownMinutes: String(autoMode.duplicateCooldownMinutes)
-    });
+    setStrategySettings(strategySettingsFromAutoMode(autoMode));
   }, [autoMode, settingsDirty]);
 
   const summary = React.useMemo(() => buildSummary(status, positions, journal), [status, positions, journal]);
@@ -632,6 +715,26 @@ function App() {
           XAUUSD: positiveNumber(nextSettings.xauusdHardTpUsd, 10),
           EURUSD: positiveNumber(nextSettings.eurusdHardTpUsd, 10)
         },
+        recoveryEnabled: nextSettings.recoveryEnabled,
+        reversalHedgeScore: Math.round(clampNumber(nextSettings.reversalHedgeScore, 50, 100, 75)),
+        recoveryResumeScore: Math.round(clampNumber(nextSettings.recoveryResumeScore, 0, 74, 45)),
+        hedgeRatio: clampNumber(nextSettings.hedgeRatioPercent, 10, 70, 50) / 100,
+        hedgeProfitUsd: {
+          XAUUSD: positiveNumber(nextSettings.xauusdHedgeProfitUsd, 10),
+          EURUSD: positiveNumber(nextSettings.eurusdHedgeProfitUsd, 10)
+        },
+        recoveryMultiplier: clampNumber(nextSettings.recoveryMultiplier, 1, 1.5, 1.35),
+        maxRecoveryLayers: Math.round(clampNumber(nextSettings.maxRecoveryLayers, 0, 2, 2)),
+        basketTargetUsd: {
+          XAUUSD: positiveNumber(nextSettings.xauusdBasketTargetUsd, 15),
+          EURUSD: positiveNumber(nextSettings.eurusdBasketTargetUsd, 10)
+        },
+        basketMaxLossUsd: {
+          XAUUSD: positiveNumber(nextSettings.xauusdBasketMaxLossUsd, 100),
+          EURUSD: positiveNumber(nextSettings.eurusdBasketMaxLossUsd, 50)
+        },
+        recoveryCooldownSeconds: Math.round(clampNumber(nextSettings.recoveryCooldownSeconds, 15, 3600, 60)),
+        shockAtrMultiplier: clampNumber(nextSettings.shockAtrMultiplier, 1, 5, 1.5),
         maxTotalRiskPercent: clampNumber(nextSettings.maxTotalRiskPercent, 0.1, 100, 20),
         minScore: Math.round(clampNumber(nextSettings.minScore, 0, 100, 60)),
         riskMode: nextSettings.riskMode,
@@ -641,18 +744,7 @@ function App() {
       })
     });
     setAutoMode(payload);
-    setStrategySettings({
-      enabled: payload.enabled,
-      activeSymbols: payload.activeSymbols ?? ["XAUUSD", "EURUSD"],
-      xauusdHardTpUsd: String(payload.hardTakeProfitUsd?.XAUUSD ?? 10),
-      eurusdHardTpUsd: String(payload.hardTakeProfitUsd?.EURUSD ?? 10),
-      maxTotalRiskPercent: String(payload.maxTotalRiskPercent),
-      minScore: String(payload.minScore),
-      riskMode: payload.riskMode,
-      riskValue: String(payload.riskValue),
-      scanIntervalSeconds: String(payload.scanIntervalSeconds),
-      duplicateCooldownMinutes: String(payload.duplicateCooldownMinutes)
-    });
+    setStrategySettings(strategySettingsFromAutoMode(payload));
     setSettingsDirty(false);
     setToast("Strategy & risk settings saved.");
     refresh().catch(() => undefined);
@@ -716,18 +808,7 @@ function App() {
           onReset={() => {
             setSettingsDirty(false);
             if (autoMode) {
-              setStrategySettings({
-                enabled: autoMode.enabled,
-                activeSymbols: autoMode.activeSymbols ?? ["XAUUSD", "EURUSD"],
-                xauusdHardTpUsd: String(autoMode.hardTakeProfitUsd?.XAUUSD ?? 10),
-                eurusdHardTpUsd: String(autoMode.hardTakeProfitUsd?.EURUSD ?? 10),
-                maxTotalRiskPercent: String(autoMode.maxTotalRiskPercent),
-                minScore: String(autoMode.minScore),
-                riskMode: autoMode.riskMode,
-                riskValue: String(autoMode.riskValue),
-                scanIntervalSeconds: String(autoMode.scanIntervalSeconds),
-                duplicateCooldownMinutes: String(autoMode.duplicateCooldownMinutes)
-              });
+              setStrategySettings(strategySettingsFromAutoMode(autoMode));
             } else {
               setStrategySettings(defaultStrategyRiskSettings);
             }
@@ -756,6 +837,12 @@ function App() {
           <strong>{autoTrailing?.activeTickets ?? 0}/{autoTrailing?.trackedTickets ?? 0}</strong>
           <small>Always ON - checks every {formatSeconds(autoTrailing?.monitorIntervalSeconds ?? 1)}</small>
           <small>{formatTrailingRules(autoTrailing?.rules)}</small>
+        </div>
+        <div className="quote-card">
+          <span>Hedge Recovery</span>
+          <strong>{recoveryStatus?.enabled ? "ON" : "OFF"}</strong>
+          <small>{formatRecoveryPhases(recoveryStatus?.cycles)}</small>
+          <small>Checks every {formatSeconds(recoveryStatus?.monitorIntervalSeconds ?? 5)}</small>
         </div>
       </section>
 
@@ -1246,6 +1333,49 @@ function StrategySettingsPage({
           </div>
         </section>
 
+        <section className="settings-card">
+          <div className="settings-card-heading">
+            <strong>Hedge Recovery</strong>
+            <span className={settings.recoveryEnabled ? "settings-state on" : "settings-state off"}>{settings.recoveryEnabled ? "ON" : "OFF"}</span>
+          </div>
+          <label className="settings-toggle">
+            <input type="checkbox" checked={settings.recoveryEnabled} onChange={(event) => onChange({ recoveryEnabled: event.target.checked })} />
+            <span>Enable bounded hedge recovery</span>
+          </label>
+          <SettingsNumber label="Reversal hedge trigger" value={settings.reversalHedgeScore} min={50} max={100} step={1} suffix="score" onChange={(value) => onChange({ reversalHedgeScore: value })} />
+          <SettingsNumber label="Recovery resume maximum" value={settings.recoveryResumeScore} min={0} max={74} step={1} suffix="score" onChange={(value) => onChange({ recoveryResumeScore: value })} />
+          <SettingsNumber label="Partial hedge ratio" value={settings.hedgeRatioPercent} min={10} max={70} step={1} suffix="%" onChange={(value) => onChange({ hedgeRatioPercent: value })} />
+          <SettingsNumber label="Shock candle threshold" value={settings.shockAtrMultiplier} min={1} max={5} step={0.1} suffix="ATR" onChange={(value) => onChange({ shockAtrMultiplier: value })} />
+          <SettingsNumber label="Action cooldown" value={settings.recoveryCooldownSeconds} min={15} max={3600} step={1} suffix="seconds" onChange={(value) => onChange({ recoveryCooldownSeconds: value })} />
+        </section>
+
+        <section className="settings-card">
+          <div className="settings-card-heading">
+            <strong>Hedge & Recovery Entry</strong>
+            <span>Bounded sizing</span>
+          </div>
+          <SettingsNumber label="XAUUSD hedge profit target" value={settings.xauusdHedgeProfitUsd} min={0.01} step={0.01} suffix="USD" onChange={(value) => onChange({ xauusdHedgeProfitUsd: value })} />
+          <SettingsNumber label="EURUSD hedge profit target" value={settings.eurusdHedgeProfitUsd} min={0.01} step={0.01} suffix="USD" onChange={(value) => onChange({ eurusdHedgeProfitUsd: value })} />
+          <SettingsNumber label="Recovery lot multiplier" value={settings.recoveryMultiplier} min={1} max={1.5} step={0.05} suffix="x" onChange={(value) => onChange({ recoveryMultiplier: value })} />
+          <SettingsNumber label="Maximum recovery layers" value={settings.maxRecoveryLayers} min={0} max={2} step={1} suffix="layers" onChange={(value) => onChange({ maxRecoveryLayers: value })} />
+          <div className="settings-risk-preview">
+            <Metric label="Lot cap" value="0.10" />
+            <Metric label="Hedge size" value={`${clampNumber(settings.hedgeRatioPercent, 10, 70, 50).toFixed(0)}%`} />
+            <Metric label="Layers" value={`${Math.round(clampNumber(settings.maxRecoveryLayers, 0, 2, 2))}`} />
+          </div>
+        </section>
+
+        <section className="settings-card">
+          <div className="settings-card-heading">
+            <strong>Basket Exit</strong>
+            <span>USD per pair cycle</span>
+          </div>
+          <SettingsNumber label="XAUUSD basket target" value={settings.xauusdBasketTargetUsd} min={0.01} step={0.01} suffix="USD" onChange={(value) => onChange({ xauusdBasketTargetUsd: value })} />
+          <SettingsNumber label="EURUSD basket target" value={settings.eurusdBasketTargetUsd} min={0.01} step={0.01} suffix="USD" onChange={(value) => onChange({ eurusdBasketTargetUsd: value })} />
+          <SettingsNumber label="XAUUSD emergency loss cap" value={settings.xauusdBasketMaxLossUsd} min={0.01} step={0.01} suffix="USD" onChange={(value) => onChange({ xauusdBasketMaxLossUsd: value })} />
+          <SettingsNumber label="EURUSD emergency loss cap" value={settings.eurusdBasketMaxLossUsd} min={0.01} step={0.01} suffix="USD" onChange={(value) => onChange({ eurusdBasketMaxLossUsd: value })} />
+        </section>
+
         <section className="settings-card settings-guide">
           <div className="settings-card-heading">
             <strong>Execution rules</strong>
@@ -1255,6 +1385,8 @@ function StrategySettingsPage({
             <span>M15, M30, H1 = execution timeframe</span>
             <span>H4, D1 = monitor/context only</span>
             <span>Lot max per position tetap 0.10</span>
+            <span>Recovery: {settings.recoveryEnabled ? "ON" : "OFF"}, hedge {clampNumber(settings.hedgeRatioPercent, 10, 70, 50).toFixed(0)}%, max {Math.round(clampNumber(settings.maxRecoveryLayers, 0, 2, 2))} layer</span>
+            <span>Basket exit menghitung P/L main + hedge + recovery per pair</span>
             <span>XAUUSD Hard TP: {formatMoney(positiveNumber(settings.xauusdHardTpUsd, 10))}</span>
             <span>EURUSD Hard TP: {formatMoney(positiveNumber(settings.eurusdHardTpUsd, 10))}</span>
             <span>Pair aktif auto-entry: {formatActiveSymbols(settings.activeSymbols)}</span>
@@ -1609,6 +1741,17 @@ function LegacyApp() {
         enabled,
         activeSymbols: autoMode?.activeSymbols ?? ["XAUUSD", "EURUSD"],
         hardTakeProfitUsd: autoMode?.hardTakeProfitUsd ?? { XAUUSD: 10, EURUSD: 10 },
+        recoveryEnabled: autoMode?.recoveryEnabled ?? false,
+        reversalHedgeScore: autoMode?.reversalHedgeScore ?? 75,
+        recoveryResumeScore: autoMode?.recoveryResumeScore ?? 45,
+        hedgeRatio: autoMode?.hedgeRatio ?? 0.5,
+        hedgeProfitUsd: autoMode?.hedgeProfitUsd ?? { XAUUSD: 10, EURUSD: 10 },
+        recoveryMultiplier: autoMode?.recoveryMultiplier ?? 1.35,
+        maxRecoveryLayers: autoMode?.maxRecoveryLayers ?? 2,
+        basketTargetUsd: autoMode?.basketTargetUsd ?? { XAUUSD: 15, EURUSD: 10 },
+        basketMaxLossUsd: autoMode?.basketMaxLossUsd ?? { XAUUSD: 100, EURUSD: 50 },
+        recoveryCooldownSeconds: autoMode?.recoveryCooldownSeconds ?? 60,
+        shockAtrMultiplier: autoMode?.shockAtrMultiplier ?? 1.5,
         maxTotalRiskPercent: 20,
         minScore: 60,
         riskMode,
@@ -2868,6 +3011,11 @@ function formatSeconds(value: number) {
 function formatTrailingRules(rules: AutoTrailingRule[] | null | undefined) {
   if (!rules || rules.length === 0) return "Trigger $10";
   return rules.map((rule) => `${rule.symbol} ${formatCompactNumber(rule.distancePips)}p/${formatCompactNumber(rule.stepPips)}p`).join(" - ");
+}
+
+function formatRecoveryPhases(cycles: RecoveryCycleStatus[] | null | undefined) {
+  if (!cycles || cycles.length === 0) return "No active cycle";
+  return cycles.map((cycle) => `${cycle.symbol} ${cycle.phase.replace(/_/g, " ")}`).join(" - ");
 }
 
 function formatCompactNumber(value: number) {

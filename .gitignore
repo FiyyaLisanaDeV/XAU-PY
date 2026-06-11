@@ -13,4 +13,5 @@ vite.config.d.ts
 data/investing_*.json
 data/reset_state.json
 data/strategy_settings.json
+data/recovery_state.json
 data/potential_signals.jsonl

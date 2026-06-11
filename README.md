@@ -27,6 +27,8 @@ Local FastAPI + React dashboard for `XAUUSD` and `EURUSD` trading workflow with 
 | Total risk cap | `20%` equity |
 | Max lot per position | `0.10` |
 | Hard TP | configurable per pair, default `XAUUSD $10` and `EURUSD $10` |
+| Hedge recovery | configurable, default `OFF` |
+| Recovery layers | maximum `2`, multiplier maximum `1.50x` |
 | Investing auto sync | every `60 seconds` |
 | Restart all services | frontend button starts `5174` if needed and restarts backend `9000` |
 
@@ -125,6 +127,8 @@ http://127.0.0.1:9000/api/ea/status
 | `GET /api/auto-mode/status` | Full Auto status and exposure |
 | `POST /api/auto-mode` | save Full Auto and risk settings |
 | `POST /api/auto-mode/scan-now` | run immediate auto scan |
+| `GET /api/recovery/status` | hedge/recovery phase and basket P/L per pair |
+| `POST /api/recovery/scan-now` | run an immediate recovery evaluation |
 | `GET /api/investing/status` | Investing sync status by pair |
 | `GET /api/investing/technical` | Investing technical, timeframe, MA, indicator, pivot data |
 | `POST /api/investing/sync` | manual Investing sync |
@@ -155,6 +159,7 @@ Runtime files are intentionally ignored from Git:
 ```text
 data/investing_*.json
 data/reset_state.json
+data/recovery_state.json
 data/potential_signals.jsonl
 .tmp/
 ```

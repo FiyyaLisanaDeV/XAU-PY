@@ -180,6 +180,7 @@ class OrderValidation(BaseModel):
 class ExecuteOrderRequest(RiskRequest):
     lot: float | None = None
     confirmed: bool = False
+    comment: str | None = None
 
 
 class ExecuteOrderResponse(BaseModel):
@@ -400,6 +401,17 @@ class AutoModeRequest(BaseModel):
     enabled: bool
     activeSymbols: list[Symbol] = Field(default_factory=lambda: ["XAUUSD", "EURUSD"])
     hardTakeProfitUsd: dict[Symbol, Annotated[float, Field(gt=0)]] = Field(default_factory=lambda: {"XAUUSD": 10.0, "EURUSD": 10.0})
+    recoveryEnabled: bool = False
+    reversalHedgeScore: int = Field(default=75, ge=50, le=100)
+    recoveryResumeScore: int = Field(default=45, ge=0, le=74)
+    hedgeRatio: float = Field(default=0.5, ge=0.1, le=0.7)
+    hedgeProfitUsd: dict[Symbol, Annotated[float, Field(gt=0)]] = Field(default_factory=lambda: {"XAUUSD": 10.0, "EURUSD": 10.0})
+    recoveryMultiplier: float = Field(default=1.35, ge=1.0, le=1.5)
+    maxRecoveryLayers: int = Field(default=2, ge=0, le=2)
+    basketTargetUsd: dict[Symbol, Annotated[float, Field(gt=0)]] = Field(default_factory=lambda: {"XAUUSD": 15.0, "EURUSD": 10.0})
+    basketMaxLossUsd: dict[Symbol, Annotated[float, Field(gt=0)]] = Field(default_factory=lambda: {"XAUUSD": 100.0, "EURUSD": 50.0})
+    recoveryCooldownSeconds: int = Field(default=60, ge=15, le=3600)
+    shockAtrMultiplier: float = Field(default=1.5, ge=1.0, le=5.0)
     maxTotalRiskPercent: float = Field(default=20.0, gt=0, le=100)
     minScore: int = Field(default=60, ge=0, le=100)
     riskMode: RiskMode = RiskMode.PERCENT_EQUITY
@@ -423,6 +435,17 @@ class AutoModeStatus(BaseModel):
     enabled: bool = False
     activeSymbols: list[Symbol] = Field(default_factory=lambda: ["XAUUSD", "EURUSD"])
     hardTakeProfitUsd: dict[Symbol, Annotated[float, Field(gt=0)]] = Field(default_factory=lambda: {"XAUUSD": 10.0, "EURUSD": 10.0})
+    recoveryEnabled: bool = False
+    reversalHedgeScore: int = 75
+    recoveryResumeScore: int = 45
+    hedgeRatio: float = 0.5
+    hedgeProfitUsd: dict[Symbol, Annotated[float, Field(gt=0)]] = Field(default_factory=lambda: {"XAUUSD": 10.0, "EURUSD": 10.0})
+    recoveryMultiplier: float = 1.35
+    maxRecoveryLayers: int = 2
+    basketTargetUsd: dict[Symbol, Annotated[float, Field(gt=0)]] = Field(default_factory=lambda: {"XAUUSD": 15.0, "EURUSD": 10.0})
+    basketMaxLossUsd: dict[Symbol, Annotated[float, Field(gt=0)]] = Field(default_factory=lambda: {"XAUUSD": 100.0, "EURUSD": 50.0})
+    recoveryCooldownSeconds: int = 60
+    shockAtrMultiplier: float = 1.5
     maxTotalRiskPercent: float = 20.0
     minScore: int = 60
     riskMode: RiskMode = RiskMode.PERCENT_EQUITY
@@ -442,3 +465,26 @@ class AutoScanResponse(BaseModel):
     executed: int
     blocked: list[str]
     actions: list[AutoExecutionItem]
+
+
+class RecoveryCycleStatus(BaseModel):
+    symbol: Symbol
+    phase: Literal["NORMAL", "HEDGE_ACTIVE", "WAIT_RECOVERY", "RECOVERY_ACTIVE", "BASKET_EXIT", "EMERGENCY_EXIT"]
+    mainSide: Side | None = None
+    reversalScore: int = 0
+    recoveryLayers: int = 0
+    realizedHedgeProfit: float = 0.0
+    openBasketProfit: float = 0.0
+    basketProfit: float = 0.0
+    mainTickets: list[int] = Field(default_factory=list)
+    hedgeTickets: list[int] = Field(default_factory=list)
+    recoveryTickets: list[int] = Field(default_factory=list)
+    lastAction: str | None = None
+    updatedAt: str | None = None
+
+
+class RecoveryEngineStatus(BaseModel):
+    enabled: bool
+    monitorIntervalSeconds: float
+    cycles: list[RecoveryCycleStatus]
+    message: str

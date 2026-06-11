@@ -1,5 +1,25 @@
 # Change Log
 
+## 2026-06-11
+
+### Added
+
+- Added optional bounded martingale hedge recovery, disabled by default.
+- Added completed-candle M15/M30 reversal scoring and original-direction recovery confirmation.
+- Added persisted recovery phases: `NORMAL`, `HEDGE_ACTIVE`, `WAIT_RECOVERY`, `RECOVERY_ACTIVE`, `BASKET_EXIT`, and `EMERGENCY_EXIT`.
+- Added configurable hedge ratio, hedge profit targets, recovery multiplier, maximum layers, cooldown, shock threshold, basket targets, and emergency loss caps.
+- Added `GET /api/recovery/status` and `POST /api/recovery/scan-now`.
+- Added Summary recovery status and complete recovery controls on the Settings page.
+- Added backend tests for reversal detection, hedge exit, recovery entry, lot cap, and basket-safe hard TP behavior.
+
+### Safety
+
+- Recovery positions use MT5 comments so they remain separate from ordinary strategy positions.
+- Hedge and recovery orders remain capped at `0.10` lot.
+- Recovery orders still pass spread, stop-loss, per-order risk, total exposure, MT5 readiness, and demo guard checks.
+- Per-position hard TP and trailing are paused while a pair recovery basket is active.
+- Recovery engine state survives backend restarts in `data/recovery_state.json`.
+
 ## 2026-06-05
 
 ### Added

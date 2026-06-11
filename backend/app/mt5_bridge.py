@@ -556,7 +556,7 @@ class MT5Bridge:
             "tp": round(float(order.takeProfit), digits),
             "deviation": int(os.getenv("XAUGBPEUUSD_MT5_DEVIATION", "30")),
             "magic": int(os.getenv("XAUGBPEUUSD_MT5_MAGIC", "260603")),
-            "comment": "XAUGBPEUUSD strategy app",
+            "comment": (order.comment or "XAUGBPEUUSD strategy app")[:31],
             "type_time": mt5.ORDER_TIME_GTC,
         }
         filling = self._select_filling_mode(info, is_market)
