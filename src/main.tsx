@@ -14,7 +14,7 @@ import {
   type LineData,
   type UTCTimestamp
 } from "lightweight-charts";
-import { Activity, AlertTriangle, BookOpen, CheckCircle2, ChevronDown, Layers, Maximize2, Minimize2, PlugZap, RefreshCw, RotateCw, ShieldCheck, TrendingUp, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, BookOpen, CalendarDays, CheckCircle2, ChevronDown, Layers, Maximize2, Minimize2, PlugZap, RefreshCw, RotateCw, ShieldCheck, TrendingUp, XCircle } from "lucide-react";
 import "./styles.css";
 
 type SymbolName = "XAUUSD" | "EURUSD";
@@ -562,14 +562,17 @@ interface EconomicEvent {
   actual: string | null;
   forecast: string | null;
   previous: string | null;
-  source: "mql5" | "manual";
+  source: "mql5" | "mt5_html" | "manual";
   affected_symbols: SymbolName[];
 }
 
 interface EconomicCalendarResponse {
-  source: "mql5_export" | "not_configured";
+  source: "mt5_html_export" | "mql5_export" | "not_configured";
   configured: boolean;
   message: string;
+  exportedAt: string | null;
+  timezone: string;
+  visibleImpacts: Array<"medium" | "high">;
   events: EconomicEvent[];
 }
 
@@ -1241,6 +1244,8 @@ function App() {
 
       <TradingProfileSummary autoMode={autoMode} marketRegimes={marketRegimes} />
 
+      <SummaryNewsCalendar calendar={calendar} />
+
       <section className="confluence-panel">
         <div className="summary-section-heading compact">
           <div>
@@ -1457,6 +1462,66 @@ function TradingProfileSummary({ autoMode, marketRegimes }: { autoMode: AutoMode
           </span>
         </div>
       </div>
+    </section>
+  );
+}
+
+function SummaryNewsCalendar({ calendar }: { calendar: EconomicCalendarResponse | null }) {
+  const upcomingEvents = React.useMemo(() => {
+    const visible = (calendar?.events ?? [])
+      .filter((event) => event.impact === "medium" || event.impact === "high")
+      .sort((left, right) => new Date(left.time).getTime() - new Date(right.time).getTime());
+    const upcoming = visible.filter((event) => new Date(event.time).getTime() >= Date.now() - 60 * 60 * 1000);
+    return upcoming.length > 0 ? upcoming : visible;
+  }, [calendar]);
+  const events = React.useMemo(() => {
+    const selected = [
+      ...upcomingEvents.filter((event) => event.impact === "high").slice(0, 4),
+      ...upcomingEvents.filter((event) => event.impact === "medium").slice(0, 4)
+    ];
+    return selected.sort((left, right) => new Date(left.time).getTime() - new Date(right.time).getTime());
+  }, [upcomingEvents]);
+  const highCount = upcomingEvents.filter((event) => event.impact === "high").length;
+
+  return (
+    <section className="summary-news-calendar">
+      <div className="summary-news-heading">
+        <div className="summary-news-title">
+          <span className="summary-news-icon"><CalendarDays size={18} /></span>
+          <div>
+            <span className="panel-title">Market news</span>
+            <h2>Economic calendar: Medium & High impact</h2>
+            <p>USD news affects XAUUSD and EURUSD. EUR news affects EURUSD.</p>
+          </div>
+        </div>
+        <div className="summary-news-status">
+          <strong>{upcomingEvents.length} scheduled</strong>
+          <span>{highCount} high impact</span>
+          <small>{calendar?.exportedAt ? `Export ${formatDateLabel(calendar.exportedAt)}` : "Waiting for export"}</small>
+        </div>
+      </div>
+
+      {events.length > 0 ? (
+        <div className="summary-news-grid">
+          {events.map((event) => (
+            <article key={event.id} className={`summary-news-item ${event.impact}`}>
+              <div className="summary-news-time">
+                <strong>{formatNewsTime(event.time)}</strong>
+                <span>{event.currency} · {event.country}</span>
+              </div>
+              <div className="summary-news-event">
+                <strong>{event.title}</strong>
+                <span>{event.affected_symbols.join(", ")}</span>
+              </div>
+              <span className={`impact-pill ${event.impact}`}>{event.impact}</span>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="calendar-empty">
+          {calendar?.message ?? "Calendar export sedang dibaca dari folder Calender Export."}
+        </div>
+      )}
     </section>
   );
 }
@@ -4288,10 +4353,10 @@ function EconomicCalendarBox({ calendar, activeSymbol, compact = false }: { cale
       <div className="calendar-heading">
         <div>
           <span className="panel-title">Economic events</span>
-          <h2>MQL5 Calendar impact for {activeSymbol}</h2>
+          <h2>Medium & High impact for {activeSymbol}</h2>
         </div>
         <span className={calendar?.configured ? "calendar-source active" : "calendar-source"}>
-          {calendar?.configured ? "MQL5 export active" : "MQL5 export needed"}
+          {calendar?.configured ? "Local export active" : "Calendar export needed"}
         </span>
       </div>
       <p className="calendar-message">{calendar?.message ?? "Loading economic calendar status..."}</p>
@@ -4315,7 +4380,7 @@ function EconomicCalendarBox({ calendar, activeSymbol, compact = false }: { cale
         </div>
       ) : (
         <div className="calendar-empty">
-          Run `mql5/ExportEconomicCalendar.mq5` in MetaTrader 5 to populate USD, GBP, and EUR events from the MQL5 Calendar API.
+          Export Economic Calendar dari MetaTrader 5 ke folder `Calender Export`.
         </div>
       )}
     </section>
@@ -4533,6 +4598,20 @@ function formatDateLabel(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatNewsTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("id-ID", {
+    timeZone: "Asia/Makassar",
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(date);
 }
 
 function formatSpread(value: number | null | undefined) {

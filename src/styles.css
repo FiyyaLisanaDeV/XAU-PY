@@ -606,6 +606,115 @@ button {
   gap: 12px;
 }
 
+.summary-news-calendar {
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid #dfe5ec;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 12px 34px rgba(30, 41, 59, 0.06);
+}
+
+.summary-news-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.summary-news-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.summary-news-icon {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.summary-news-title h2 {
+  margin: 4px 0;
+  font-size: 19px;
+}
+
+.summary-news-title p {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.summary-news-status {
+  min-width: 150px;
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.summary-news-status strong {
+  color: #18202f;
+  font-size: 13px;
+}
+
+.summary-news-status span,
+.summary-news-status small {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.summary-news-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.summary-news-item {
+  min-width: 0;
+  min-height: 70px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #fed7aa;
+  border-left: 4px solid #f59e0b;
+  border-radius: 8px;
+  background: #fffbeb;
+}
+
+.summary-news-item.high {
+  border-color: #fecaca;
+  border-left-color: #dc2626;
+  background: #fef2f2;
+}
+
+.summary-news-time,
+.summary-news-event {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.summary-news-time strong,
+.summary-news-event strong {
+  color: #18202f;
+  font-size: 12px;
+}
+
+.summary-news-time span,
+.summary-news-event span {
+  color: #64748b;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
 .profile-summary-heading {
   display: flex;
   align-items: flex-start;
@@ -1415,6 +1524,22 @@ button {
 @media (max-width: 820px) {
   .summary-quotes {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .summary-news-heading {
+    flex-direction: column;
+  }
+
+  .summary-news-status {
+    justify-items: start;
+  }
+
+  .summary-news-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .summary-news-item {
+    grid-template-columns: 100px minmax(0, 1fr) auto;
   }
 }
 

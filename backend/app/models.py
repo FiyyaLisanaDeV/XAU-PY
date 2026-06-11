@@ -553,14 +553,17 @@ class EconomicEvent(BaseModel):
     actual: str | None = None
     forecast: str | None = None
     previous: str | None = None
-    source: Literal["mql5", "manual"]
+    source: Literal["mql5", "mt5_html", "manual"]
     affected_symbols: list[Symbol]
 
 
 class EconomicCalendarResponse(BaseModel):
-    source: Literal["mql5_export", "not_configured"]
+    source: Literal["mt5_html_export", "mql5_export", "not_configured"]
     configured: bool
     message: str
+    exportedAt: str | None = None
+    timezone: str = "UTC"
+    visibleImpacts: list[Literal["medium", "high"]] = Field(default_factory=lambda: ["medium", "high"])
     events: list[EconomicEvent]
 
 
