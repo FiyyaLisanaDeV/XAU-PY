@@ -9,6 +9,7 @@ qa-screenshots/
 vite.config.js
 vite.config.d.ts
 .env
+token.txt
 .tmp/
 data/investing_*.json
 data/reset_state.json
