@@ -1,176 +1,506 @@
 # XAU-PY Trading Dashboard
 
-Local FastAPI + React dashboard for `XAUUSD` and `EURUSD` trading workflow with MT5 integration, Full Auto controls, risk guard, Investing.com confirmation, account summary, and execution monitoring.
+[![Backend](https://img.shields.io/badge/backend-FastAPI-009688)](#run-the-app)
+[![Frontend](https://img.shields.io/badge/frontend-React%20%2B%20Vite-2563eb)](#dashboard-pages)
+[![MT5](https://img.shields.io/badge/execution-MetaTrader%205-0f172a)](#mt5-setup)
+[![Tests](https://img.shields.io/badge/tests-40%20passing-16a34a)](#verification)
+[![Safety](https://img.shields.io/badge/default-shadow%20mode-f59e0b)](#safety-first)
 
-> This app is built as a local trading assistant. It does not guarantee profit. Every automated decision is still constrained by MT5 status, demo guard, spread, stop loss, total risk cap, lot cap, and Investing.com confirmation.
+Local trading control center for `XAUUSD` and `EURUSD`, built with FastAPI, React, and MetaTrader 5 integration.
 
-## Quick Links
+The application combines strategy signals, pair-specific market gates, account risk, aggregate exposure, Investing.com confirmation, persistent trade state, trailing, hard TP, recovery controls, and decision logging in one dashboard.
 
-| Area | File |
+> [!CAUTION]
+> This software does not guarantee profit. Keep Shadow Mode enabled until account exposure, pair state, data sources, and Parameter Check are ready.
+
+## Navigation
+
+- [Start the app](#run-the-app)
+- [Open the dashboard](http://127.0.0.1:5174)
+- [Check backend health](http://127.0.0.1:9000/api/backend/health)
+- [Check EA connection](http://127.0.0.1:9000/api/ea/status)
+- [Understand the strategy](#how-an-order-is-decided)
+- [Review pair profiles](#pair-profiles)
+- [Review safety controls](#safety-first)
+- [Explore API endpoints](#api-map)
+- [Troubleshoot startup](#troubleshooting)
+
+## System Snapshot
+
+| Component | Current design |
 | --- | --- |
-| Feature catalog | [docs/FEATURES.md](docs/FEATURES.md) |
-| Strategy and risk guide | [docs/STRATEGY_AND_RISK.md](docs/STRATEGY_AND_RISK.md) |
-| Decision guide | [docs/APP_DECISION_GUIDE.md](docs/APP_DECISION_GUIDE.md) |
-| Change log | [docs/CHANGELOG.md](docs/CHANGELOG.md) |
-
-## Current Defaults
-
-| Setting | Value |
-| --- | --- |
-| Backend | `http://127.0.0.1:9000` |
-| Frontend | `http://127.0.0.1:5174` |
-| Active pairs | `XAUUSD`, `EURUSD` |
+| Backend | FastAPI on `127.0.0.1:9000` |
+| Frontend | React dashboard on `127.0.0.1:5174` |
+| Trading terminal | MetaTrader 5 / Exness |
+| Pair profiles | `XAUUSD`, `EURUSD` |
 | Removed pair | `GBPUSD` |
 | Execution timeframes | `M15`, `M30`, `H1` |
-| Monitor-only timeframes | `H4`, `D1` |
-| Minimum confluence score | `60` |
-| Total risk cap | `20%` equity |
-| Max lot per position | `0.10` |
-| Hard TP | configurable per pair, default `XAUUSD $10` and `EURUSD $10` |
-| Hedge recovery | configurable, default `OFF` |
-| Recovery layers | maximum `2`, multiplier maximum `1.50x` |
-| Account money mode | `USD` or `USC`; `100 USC = 1 USD` |
-| Minimum balance calculator | dynamic from current M15/M30/H1 stop distance at `0.01` lot |
-| Investing auto sync | every `60 seconds` |
-| Restart all services | frontend button starts `5174` if needed and restarts backend `9000` |
-| Config safety | v2 migration backup + shadow mode |
-| XAUUSD aggregate SL cap | `15%` of `min(balance, equity)` |
-| EURUSD profile | strict gate, `0.25%` risk, `0.05` max lot, one open position |
+| Context timeframes | `H4`, `D1` |
+| Account modes | Standard `USD` or cent `USC` |
+| USC conversion | `100 USC = 1 USD` |
+| Global risk cap | Configurable, default `20%` |
+| Maximum lot | `0.10` per position |
+| Investing sync | Automatic every `60 seconds` |
+| Configuration | Pair-aware config version `2` |
+| Migration behavior | Backup settings and enable Shadow Mode |
 
-## How The System Decides
+## Dashboard Pages
 
-```mermaid
-flowchart TD
-  A[MT5 candles and ticks] --> B[Build market snapshot]
-  B --> C[Confluence score]
-  C --> D{Score >= 60?}
-  D -- no --> X[Blocked: weak setup]
-  D -- yes --> E[Investing.com timeframe confirmation]
-  E --> F{Direction aligned?}
-  F -- no --> Y[Blocked: external bias conflict]
-  F -- yes --> G[Risk validation]
-  G --> H{Risk, spread, lot, SL valid?}
-  H -- no --> Z[Blocked: safety guard]
-  H -- yes --> I[Full Auto can execute on M15/M30/H1]
-```
+| Page | What it answers |
+| --- | --- |
+| **Summary** | What is the account P/L, open exposure, trade count, and current operating state? |
+| **Strategy System** | Which strategy, risk, market-data, pair-state, and signal parameters currently pass or block? |
+| **Settings** | Which pairs and protections are enabled, and what are their exact limits? |
+| **Investing** | What technical, timeframe, moving-average, indicator, and Fibonacci pivot data was synchronized? |
 
-Short version:
+### Parameter Check
 
-1. MT5 data creates the trade idea.
-2. Confluence score decides if the setup is technically worth considering.
-3. Investing.com confirms the direction by timeframe.
-4. Risk engine decides if the trade is allowed.
-5. Full Auto executes only if every guard passes.
-
-## Investing.com Timeframe Map
-
-The app stores Investing.com timeframe signals and maps them to internal strategy timeframes:
-
-| App timeframe | Investing timeframe | Use |
-| --- | --- | --- |
-| `M15` | `15m` | execution confirmation, often locked by Investing |
-| `M30` | `30m` | execution confirmation |
-| `H1` | `1h` | execution confirmation |
-| `H4` | `5h` | monitor/context confirmation |
-| `D1` | `1d` | monitor/context confirmation |
-
-If `15m` is locked, the backend will not pretend it has valid 15m data. It records locked status and falls back carefully where needed instead of using empty data as a trade signal.
-
-## Run Locally
-
-Install dependencies:
-
-```powershell
-npm install
-python -m pip install -r requirements.txt
-```
-
-Start backend on port `9000`:
-
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 9000
-```
-
-Start frontend on port `5174`:
-
-```powershell
-npm run dev
-```
-
-Open:
+The **Strategy System** page is the operational source of truth. It displays live values against expected limits:
 
 ```text
-http://127.0.0.1:5174
+PASS     Parameter is available and inside its limit
+WARNING  Parameter needs attention or is intentionally transitional
+BLOCKED  New execution must not continue
+OFF      Feature is intentionally disabled
+INFO     Informational value without a hard gate
 ```
 
-Production-style local launch:
+It includes:
+
+- Backend and MT5 readiness.
+- Config version, account mode, Full Auto, and Shadow Mode.
+- Global and pair-level risk.
+- XAUUSD aggregate SL exposure.
+- EURUSD strict gate parameters.
+- Pair lock, cooldown, and close-only state.
+- Hard TP, trailing, and recovery status.
+- Investing.com and economic-calendar readiness.
+- Confluence scores for every timeframe.
+- Potential signal logger and detailed decision audit.
+
+## Run The App
+
+### Fastest Start
 
 ```powershell
 .\launch-app.ps1
 ```
 
-## MT5 Setup
+The launcher:
 
-1. Install Exness MT5 locally.
-2. Log in to an Exness demo account first.
-3. Enable Algo Trading in MT5.
-4. Install the `MetaTrader5` Python package in the Python environment used by the backend.
-5. If MT5 is not auto-detected, set `MT5_TERMINAL_PATH`.
+1. Checks dependencies and ports.
+2. Starts the backend on `9000`.
+3. Starts the frontend on `5174`.
+4. Enables the demo guard.
+5. Checks MT5 connectivity.
+6. Opens the dashboard.
 
-EA backend URL:
-
-```text
-http://127.0.0.1:9000/api/ea/status
-```
-
-For an Exness cent account, select `USC - cent account` in Settings. Balance, equity, P/L, and journal values remain displayed in USC, while USD strategy targets and equity-based risk are converted using `100 USC = 1 USD`.
-
-The Settings page also calculates a dynamic minimum balance. It uses the widest current strategy stop across active execution timeframes, the `0.5%` per-position guard, and a `25%` operating reserve. This is a risk-capacity estimate, not a profit guarantee.
-
-## Main API Endpoints
-
-| Endpoint | Purpose |
-| --- | --- |
-| `GET /api/status` | MT5 account and trade readiness |
-| `GET /api/ea/status` | compact EA/backend health payload |
-| `GET /api/auto-mode/status` | Full Auto status and exposure |
-| `POST /api/auto-mode` | save Full Auto and risk settings |
-| `POST /api/auto-mode/scan-now` | run immediate auto scan |
-| `GET /api/recovery/status` | hedge/recovery phase and basket P/L per pair |
-| `POST /api/recovery/scan-now` | run an immediate recovery evaluation |
-| `GET /api/investing/status` | Investing sync status by pair |
-| `GET /api/investing/technical` | Investing technical, timeframe, MA, indicator, pivot data |
-| `POST /api/investing/sync` | manual Investing sync |
-| `GET /api/journal` | realized trade journal |
-| `POST /api/data/reset` | reset local dashboard baseline |
-
-## Verification
+### First Installation
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest backend/tests
-$env:ESBUILD_BINARY_PATH = (Resolve-Path node_modules\@esbuild\win32-x64\esbuild.exe).Path
-npm run build
+npm install
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Expected current baseline:
+Install `MetaTrader5` manually in a compatible Python environment when MT5 is available:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install MetaTrader5
+```
+
+### Start Services Separately
+
+Backend:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 9000
+```
+
+Frontend development server:
+
+```powershell
+npm run dev -- --port 5174
+```
+
+Open [http://127.0.0.1:5174](http://127.0.0.1:5174).
+
+## How An Order Is Decided
+
+```mermaid
+flowchart TD
+    A["MT5 real candles and tick"] --> B["Pair profile"]
+    B --> C["Internal strategy hypothesis"]
+    C --> D{"Score meets minimum?"}
+    D -- "No" --> X["Log and block"]
+    D -- "Yes" --> E["Closed-candle confirmation"]
+    E --> F["Pair-specific market gate"]
+    F --> G["Investing, pivot, regime, news"]
+    G --> H["Risk and exposure guard"]
+    H --> I["Persistent pair-state guard"]
+    I --> J{"Shadow Mode?"}
+    J -- "Yes" --> K["Log decision, do not send"]
+    J -- "No" --> L["MT5 order validation and send"]
+```
+
+An order is eligible only when all required layers agree:
 
 ```text
-backend tests: passing
-frontend build: passing
-backend port: 9000
-frontend port: 5174
+Pair enabled
++ execution timeframe
++ real MT5 data
++ sufficient confluence
++ completed candle confirmation
++ pair market gate
++ spread and RR validation
++ account risk capacity
++ pair exposure capacity
++ no active lock or cooldown
+= eligible order
 ```
 
-## Data Files
+## Pair Profiles
 
-Runtime files are intentionally ignored from Git:
+### XAUUSD
+
+XAUUSD preserves the existing multi-position strategy while adding shared safety.
+
+| Parameter | Default |
+| --- | --- |
+| Investing mode | Advisory |
+| Market Fact Gate | Advisory |
+| Maximum open positions | `5` |
+| Maximum pending orders | `2` |
+| Maximum total lot | `0.50` |
+| Maximum lot per order | `0.10` |
+| Aggregate SL cap | `15%` of `min(balance, equity)` |
+| Recovery | Configurable |
+| Pivot | Advisory unless explicitly required |
+
+Aggregate risk includes:
+
+```text
+open positions with SL
++ active pending orders with SL
++ candidate order risk
+= projected aggregate SL risk
+```
+
+An open or pending order without a valid SL blocks new exposure.
+
+### EURUSD
+
+EURUSD uses a fail-closed execution profile.
+
+| Parameter | Default |
+| --- | --- |
+| Investing mode | Required |
+| Market Fact Gate | Strict |
+| Pivot | Required |
+| MT5 real data | Required |
+| Risk per trade | `0.25%` |
+| Maximum lot | `0.05` |
+| Maximum positions | `1` |
+| Maximum pending orders | `0` |
+| Minimum RR | `1.5` |
+| SL clamp | `10-30` pips |
+| TP model | `1.6R` |
+| Cooldown after SL | `30 minutes` |
+| Loss-streak lock | `2` consecutive SL |
+| Daily loss limit | `1%` |
+| Recovery | Disabled |
+| News filter | Enabled |
+
+## Safety First
+
+### Shadow Mode
+
+Shadow Mode performs strategy, gate, risk, and exposure checks but does not send an order.
+
+During migration:
+
+- Existing positions remain managed by hard TP and trailing.
+- New entries and recovery layers are not sent.
+- Existing aggregate-cap breaches are displayed as transition warnings.
+- Shadow Mode does not persist automatic `CLOSE_ONLY` solely because legacy positions exceed the new aggregate cap.
+- Explicit pair close-only settings and existing persisted locks remain authoritative.
+
+### Hard TP And Trailing
+
+- Hard TP is configurable per pair in USD-equivalent value.
+- Hard TP has priority outside an active recovery basket.
+- The monitor checks positions every second.
+- EURUSD uses pip-based break-even and trailing.
+- XAUUSD retains its gold-specific trailing behavior.
+
+### Recovery
+
+Recovery is bounded by:
+
+- Pair profile enablement.
+- Maximum recovery layers.
+- Lot cap.
+- Pair exposure cap.
+- Global risk cap.
+- Persistent close-only state.
+- Shadow Mode.
+- MT5 readiness and demo guard.
+
+EURUSD recovery is disabled by default.
+
+### Live Readiness Checklist
+
+Before turning Shadow Mode off:
+
+- [ ] Backend is active on port `9000`.
+- [ ] MT5 is connected and Algo Trading is enabled.
+- [ ] Demo guard matches the intended account.
+- [ ] Strategy System has no unexplained `BLOCKED` parameter.
+- [ ] Pair state storage is healthy.
+- [ ] Investing data is fresh for every required pair.
+- [ ] Economic-calendar data is available for strict EURUSD execution.
+- [ ] Open positions and total lot are inside pair limits.
+- [ ] XAUUSD projected aggregate SL risk is inside its configured cap.
+- [ ] No position or pending order is missing SL.
+- [ ] Hard TP, trailing, and recovery parameters have been reviewed.
+- [ ] Settings backup exists before changing live behavior.
+
+## Investing.com Data
+
+| App timeframe | Investing timeframe | Role |
+| --- | --- | --- |
+| `M15` | `15m` | Execution confirmation |
+| `M30` | `30m` | Execution confirmation |
+| `H1` | `1h` | Execution confirmation and directional context |
+| `H4` | `5h` | Monitoring context |
+| `D1` | `1d` | Higher-timeframe context |
+
+The sync stores:
+
+- Technical summary.
+- Timeframe signals.
+- Moving averages.
+- Technical indicators.
+- Fibonacci levels `S3` through `R3`.
+- Parser, cache, retry, and strategy-use status.
+
+For EURUSD, unavailable or stale required data blocks automatic execution. For XAUUSD, Investing is advisory by default.
+
+## Account Modes
+
+Select the account type in **Settings**:
+
+| Mode | Conversion |
+| --- | --- |
+| Standard USD | `1 account unit = 1 USD` |
+| USC Cent | `100 USC = 1 USD` |
+
+The selected mode affects:
+
+- Balance and equity normalization.
+- P/L display.
+- Hard TP.
+- Hedge and basket targets.
+- Floating-loss comparisons.
+- Aggregate risk calculations.
+- Minimum-balance recommendations.
+
+The minimum-balance calculator uses current execution-timeframe stop distances, `0.01` lot, the per-position risk guard, and a `25%` operating reserve. It is a capacity estimate, not a profitability forecast.
+
+## API Map
+
+<details>
+<summary><strong>Health and services</strong></summary>
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/status` | MT5 account and execution readiness |
+| `GET` | `/api/ea/status` | Compact EA/backend status |
+| `GET` | `/api/backend/health` | Backend PID and uptime |
+| `POST` | `/api/backend/restart` | Restart backend |
+| `POST` | `/api/services/restart-all` | Restore backend and frontend services |
+| `POST` | `/api/demo-guard` | Enable or disable live-account protection |
+
+</details>
+
+<details>
+<summary><strong>Strategy, risk, and execution</strong></summary>
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/auto-mode/status` | Config, minimum balance, risk, and exposure |
+| `POST` | `/api/auto-mode` | Save strategy and risk settings |
+| `POST` | `/api/auto-mode/scan-now` | Run immediate strategy scan |
+| `GET` | `/api/signals` | Build one signal |
+| `POST` | `/api/signals/scan` | Scan configured signals |
+| `POST` | `/api/orders/validate` | Validate an order without sending |
+| `POST` | `/api/orders/execute` | Submit a confirmed order |
+| `GET` | `/api/pair-exposure` | Pair-level positions, lots, and aggregate SL risk |
+| `GET` | `/api/pair-state` | Persistent cooldown, lock, and close-only state |
+
+</details>
+
+<details>
+<summary><strong>Position management</strong></summary>
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/positions` | Current MT5 positions |
+| `GET` | `/api/positions/alerts` | Position validity alerts |
+| `POST` | `/api/positions/close` | Close one group or all positions |
+| `POST` | `/api/positions/trailing-stop` | Update a position trailing stop |
+| `GET` | `/api/auto-trailing/status` | Hard TP and trailing monitor status |
+| `GET` | `/api/recovery/status` | Recovery phase and basket P/L |
+| `POST` | `/api/recovery/scan-now` | Run immediate recovery evaluation |
+
+</details>
+
+<details>
+<summary><strong>Market data and logs</strong></summary>
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/market/ticks` | Current pair ticks |
+| `GET` | `/api/market/snapshot` | Candles, indicators, and zones |
+| `GET` | `/api/investing/status` | Investing sync health |
+| `GET` | `/api/investing/technical` | Technical and Fibonacci data |
+| `POST` | `/api/investing/sync` | Trigger manual sync |
+| `GET` | `/api/economic-calendar` | High-impact event data |
+| `GET` | `/api/signal-log` | Potential signal dataset |
+| `GET` | `/api/signal-audit` | Pair-gate decision audit |
+| `GET` | `/api/journal` | Closed-trade journal |
+| `POST` | `/api/data/reset` | Reset dashboard reporting baseline |
+
+</details>
+
+## Runtime Data
+
+Runtime state is intentionally excluded from Git:
 
 ```text
 data/investing_*.json
 data/reset_state.json
+data/strategy_settings.json
+data/settings.backup-before-v2.json
+data/migration-v2.log
 data/recovery_state.json
+data/pair_state.json
 data/potential_signals.jsonl
-.tmp/
+data/signal_audit.jsonl
+data/post_trade_review.jsonl
 ```
 
-These are live state/cache files and should not be treated as source code.
+These files contain live cache, configuration, account state, or generated trading records.
+
+## Verification
+
+Run backend tests:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest backend/tests -q
+```
+
+Build the frontend:
+
+```powershell
+npm run build
+```
+
+Check active ports:
+
+```powershell
+Get-NetTCPConnection -LocalPort 9000,5174 -State Listen
+```
+
+Expected baseline:
+
+```text
+backend tests: 40 passing
+frontend build: passing
+backend: http://127.0.0.1:9000
+frontend: http://127.0.0.1:5174
+```
+
+## Troubleshooting
+
+<details>
+<summary><strong>The app does not work after Windows starts</strong></summary>
+
+Run:
+
+```powershell
+.\launch-app.ps1
+```
+
+Or use **Restart all services** from the dashboard when the backend is reachable.
+
+Check ports:
+
+```powershell
+Get-NetTCPConnection -LocalPort 9000,5174 -State Listen
+```
+
+</details>
+
+<details>
+<summary><strong>Backend is online but a new endpoint returns 404</strong></summary>
+
+An older backend process may still be serving stale code. Restart the backend:
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:9000/api/backend/restart
+```
+
+Then verify:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:9000/api/backend/health
+```
+
+</details>
+
+<details>
+<summary><strong>MT5 is connected but orders are blocked</strong></summary>
+
+Check:
+
+1. Algo Trading is enabled in MT5.
+2. Account trading permission is enabled.
+3. Demo guard is not blocking the current account.
+4. Shadow Mode status.
+5. Pair profile enablement.
+6. Spread, score, RR, exposure, cooldown, and news status on **Strategy System**.
+
+</details>
+
+<details>
+<summary><strong>Investing.com is blocking EURUSD</strong></summary>
+
+Run a manual synchronization:
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:9000/api/investing/sync
+```
+
+Then inspect:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:9000/api/investing/status
+```
+
+EURUSD intentionally fails closed when required data cannot be trusted.
+
+</details>
+
+## Documentation
+
+| Document | Purpose |
+| --- | --- |
+| [Feature catalog](docs/FEATURES.md) | Complete feature inventory |
+| [Strategy and risk guide](docs/STRATEGY_AND_RISK.md) | Strategy, trailing, risk, and recovery behavior |
+| [Decision guide](docs/APP_DECISION_GUIDE.md) | Operational decision rules |
+| [Change log](docs/CHANGELOG.md) | Implementation history |
+
+## Repository
+
+[FiyyaLisanaDeV/XAU-PY](https://github.com/FiyyaLisanaDeV/XAU-PY)
