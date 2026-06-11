@@ -12,6 +12,17 @@ AccountMode = Literal["USD", "USC"]
 InvestingMode = Literal["advisory", "required", "disabled"]
 GateStrictness = Literal["advisory", "strict", "disabled"]
 LoggingLevel = Literal["normal", "verbose"]
+StrategyProfile = Literal["CONSERVATIVE", "OPPORTUNISTIC", "HIGH_RISK", "CUSTOM"]
+MarketRegime = Literal[
+    "TRENDING",
+    "SIDEWAYS",
+    "CHOPPY",
+    "HARD_CHOPPY",
+    "LOW_VOLATILITY",
+    "HIGH_VOLATILITY",
+    "NEWS_SHOCK",
+    "UNCERTAIN",
+]
 
 
 class Side(str, Enum):
@@ -79,6 +90,23 @@ class MarketTick(BaseModel):
     spread_points: float
     server_time: str
     source: Literal["mt5", "mock"]
+
+
+class MarketRegimeAssessment(BaseModel):
+    symbol: Symbol
+    timeframe: Timeframe
+    regime: MarketRegime
+    confidence: int = Field(ge=0, le=100)
+    approach: str
+    choppyScore: int = Field(ge=0)
+    efficiencyRatio: float = Field(ge=0, le=1)
+    emaGapAtr: float = Field(ge=0)
+    atrPercent: float = Field(ge=0)
+
+
+class MarketRegimeCollection(BaseModel):
+    generatedAt: str
+    items: list[MarketRegimeAssessment]
 
 
 class AccountStatus(BaseModel):
@@ -294,6 +322,11 @@ class PairProfile(BaseModel):
     investingMode: InvestingMode = "advisory"
     pivotRequired: bool = False
     marketFactGate: GateStrictness = "advisory"
+    marketRegimeMode: GateStrictness = "advisory"
+    allowedMarketRegimes: list[MarketRegime] = Field(default_factory=lambda: ["TRENDING", "SIDEWAYS"])
+    trendingMinScore: int = Field(default=60, ge=0, le=100)
+    sidewaysMinScore: int = Field(default=70, ge=0, le=100)
+    volatileMinScore: int = Field(default=80, ge=0, le=100)
     mt5RealDataRequired: bool = True
     recoveryEnabled: bool = True
     cooldownAfterSlMinutes: int = Field(default=0, ge=0, le=1440)
@@ -329,6 +362,11 @@ def default_pair_profiles() -> dict[Symbol, PairProfile]:
             investingMode="advisory",
             pivotRequired=False,
             marketFactGate="advisory",
+            marketRegimeMode="advisory",
+            allowedMarketRegimes=["TRENDING", "SIDEWAYS", "HIGH_VOLATILITY"],
+            trendingMinScore=60,
+            sidewaysMinScore=70,
+            volatileMinScore=80,
             recoveryEnabled=True,
             maxOpenPositions=5,
             maxPendingOrders=2,
@@ -347,6 +385,11 @@ def default_pair_profiles() -> dict[Symbol, PairProfile]:
             investingMode="required",
             pivotRequired=True,
             marketFactGate="strict",
+            marketRegimeMode="strict",
+            allowedMarketRegimes=["TRENDING", "SIDEWAYS"],
+            trendingMinScore=65,
+            sidewaysMinScore=75,
+            volatileMinScore=85,
             recoveryEnabled=False,
             cooldownAfterSlMinutes=30,
             lockAfterConsecutiveSl=2,
@@ -545,6 +588,7 @@ class SignalLogEntry(BaseModel):
 
 class AutoModeRequest(BaseModel):
     configVersion: int = Field(default=2, ge=2)
+    strategyProfile: StrategyProfile = "CUSTOM"
     shadowMode: bool = True
     enabled: bool
     accountMode: AccountMode = "USD"
@@ -584,6 +628,7 @@ class AutoExecutionItem(BaseModel):
 
 class AutoModeStatus(BaseModel):
     configVersion: int = 2
+    strategyProfile: StrategyProfile = "CUSTOM"
     shadowMode: bool = True
     enabled: bool = False
     accountMode: AccountMode = "USD"

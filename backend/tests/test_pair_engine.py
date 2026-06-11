@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from random import Random
 
 from backend.app.models import Candle, OpenPosition, OrderRecommendation, PairState, RiskMode, Side, default_pair_profiles
-from backend.app.pair_engine import apply_pair_risk_model, build_pair_exposure, normalize_investing_code
+from backend.app.pair_engine import apply_pair_risk_model, build_pair_exposure, classify_market_regime, normalize_investing_code
 
 
 def candle(index: int, price: float = 1.1000) -> Candle:
@@ -117,3 +117,29 @@ def test_shadow_transition_warns_without_enforcing_close_only():
     assert result.status == "WARNING"
     assert result.tradeMode == "NORMAL"
     assert any("CLOSE_ONLY not enforced" in reason for reason in result.reasons)
+
+
+def test_market_regime_detects_directional_trend():
+    candles = []
+    for index in range(70):
+        price = 1.08 + index * 0.0005
+        candles.append(
+            Candle(
+                time=(datetime(2026, 6, 1, tzinfo=timezone.utc) + timedelta(minutes=15 * index)).isoformat(),
+                open=price,
+                high=price + 0.0005,
+                low=price - 0.0002,
+                close=price + 0.00035,
+                volume=100,
+            )
+        )
+    result = classify_market_regime(candles, symbol="EURUSD", timeframe="M15")
+    assert result.regime == "TRENDING"
+    assert result.confidence >= 60
+    assert result.efficiencyRatio >= 0.55
+
+
+def test_market_regime_returns_uncertain_when_history_is_short():
+    result = classify_market_regime([candle(index) for index in range(10)], symbol="EURUSD", timeframe="M15")
+    assert result.regime == "UNCERTAIN"
+    assert result.confidence == 0

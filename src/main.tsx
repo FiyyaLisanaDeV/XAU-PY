@@ -235,6 +235,11 @@ interface PairProfile {
   investingMode: "advisory" | "required" | "disabled";
   pivotRequired: boolean;
   marketFactGate: "advisory" | "strict" | "disabled";
+  marketRegimeMode: "advisory" | "strict" | "disabled";
+  allowedMarketRegimes: MarketRegime[];
+  trendingMinScore: number;
+  sidewaysMinScore: number;
+  volatileMinScore: number;
   mt5RealDataRequired: boolean;
   recoveryEnabled: boolean;
   cooldownAfterSlMinutes: number;
@@ -261,6 +266,33 @@ interface PairProfile {
   maxStopPips: number;
 }
 
+type MarketRegime =
+  | "TRENDING"
+  | "SIDEWAYS"
+  | "CHOPPY"
+  | "HARD_CHOPPY"
+  | "LOW_VOLATILITY"
+  | "HIGH_VOLATILITY"
+  | "NEWS_SHOCK"
+  | "UNCERTAIN";
+
+interface MarketRegimeAssessment {
+  symbol: SymbolName;
+  timeframe: Timeframe;
+  regime: MarketRegime;
+  confidence: number;
+  approach: string;
+  choppyScore: number;
+  efficiencyRatio: number;
+  emaGapAtr: number;
+  atrPercent: number;
+}
+
+interface MarketRegimeCollection {
+  generatedAt: string;
+  items: MarketRegimeAssessment[];
+}
+
 interface PairExposureStatus {
   symbol: SymbolName;
   openPositions: number;
@@ -282,6 +314,7 @@ interface PairExposureStatus {
 
 interface AutoModeStatus {
   configVersion: number;
+  strategyProfile: StrategyProfile;
   shadowMode: boolean;
   enabled: boolean;
   accountMode: AccountMode;
@@ -406,6 +439,7 @@ interface ConfluenceScoreCard {
 
 interface StrategyRiskSettings {
   configVersion: number;
+  strategyProfile: StrategyProfile;
   shadowMode: boolean;
   enabled: boolean;
   accountMode: AccountMode;
@@ -435,6 +469,8 @@ interface StrategyRiskSettings {
   scanIntervalSeconds: string;
   duplicateCooldownMinutes: string;
 }
+
+type StrategyProfile = "CONSERVATIVE" | "OPPORTUNISTIC" | "HIGH_RISK" | "CUSTOM";
 
 interface HistoryItem {
   time: string;
@@ -597,6 +633,16 @@ interface SignalAuditEntry {
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 const symbols: SymbolName[] = ["XAUUSD", "EURUSD"];
 const timeframes: Timeframe[] = ["M15", "M30", "H1", "H4", "D1"];
+const configurableMarketRegimes: MarketRegime[] = [
+  "TRENDING",
+  "SIDEWAYS",
+  "HIGH_VOLATILITY",
+  "LOW_VOLATILITY",
+  "CHOPPY",
+  "HARD_CHOPPY",
+  "NEWS_SHOCK",
+  "UNCERTAIN"
+];
 const spreadLimits: Record<SymbolName, number> = {
   XAUUSD: 350,
   EURUSD: 18
@@ -614,6 +660,7 @@ const SCORE_BLOCK_REASON = "Confluence score below 60";
 const INVESTING_AUTO_SYNC_SECONDS = 60;
 const defaultStrategyRiskSettings: StrategyRiskSettings = {
   configVersion: 2,
+  strategyProfile: "OPPORTUNISTIC",
   shadowMode: true,
   enabled: true,
   accountMode: "USD",
@@ -622,6 +669,8 @@ const defaultStrategyRiskSettings: StrategyRiskSettings = {
       enabled: true, executionTimeframes: ["M15", "M30", "H1"], monitorTimeframes: ["H4", "D1"],
       maxSpread: 350, maxLot: 0.1, riskPercent: 0.5, minRiskReward: 1.2,
       investingMode: "advisory", pivotRequired: false, marketFactGate: "advisory",
+      marketRegimeMode: "advisory", allowedMarketRegimes: ["TRENDING", "SIDEWAYS", "HIGH_VOLATILITY"],
+      trendingMinScore: 60, sidewaysMinScore: 70, volatileMinScore: 80,
       mt5RealDataRequired: true, recoveryEnabled: true, cooldownAfterSlMinutes: 0,
       lockAfterConsecutiveSl: 0, dailyLossLimitPercent: 0, newsFilterEnabled: false,
       loggingLevel: "normal", maxOpenPositions: 5, maxPendingOrders: 2,
@@ -635,6 +684,8 @@ const defaultStrategyRiskSettings: StrategyRiskSettings = {
       enabled: true, executionTimeframes: ["M15", "M30", "H1"], monitorTimeframes: ["H4", "D1"],
       maxSpread: 18, maxLot: 0.05, riskPercent: 0.25, minRiskReward: 1.5,
       investingMode: "required", pivotRequired: true, marketFactGate: "strict",
+      marketRegimeMode: "strict", allowedMarketRegimes: ["TRENDING", "SIDEWAYS"],
+      trendingMinScore: 65, sidewaysMinScore: 75, volatileMinScore: 85,
       mt5RealDataRequired: true, recoveryEnabled: false, cooldownAfterSlMinutes: 30,
       lockAfterConsecutiveSl: 2, dailyLossLimitPercent: 1, newsFilterEnabled: true,
       loggingLevel: "verbose", maxOpenPositions: 1, maxPendingOrders: 0,
@@ -671,13 +722,108 @@ const defaultStrategyRiskSettings: StrategyRiskSettings = {
   duplicateCooldownMinutes: "10"
 };
 
+const strategyProfileDescriptions: Record<Exclude<StrategyProfile, "CUSTOM">, {
+  title: string;
+  classification: string;
+  summary: string;
+  bestFor: string;
+}> = {
+  CONSERVATIVE: {
+    title: "Conservative",
+    classification: "Risiko rendah",
+    summary: "Entry lebih selektif, posisi sedikit, dan exposure dibatasi ketat.",
+    bestFor: "Stabilitas akun, fase evaluasi, dan kondisi pasar yang belum jelas."
+  },
+  OPPORTUNISTIC: {
+    title: "Opportunistic",
+    classification: "Risiko seimbang",
+    summary: "Mencari peluang berkualitas tanpa memakai seluruh kapasitas risiko.",
+    bestFor: "Operasional harian dengan keseimbangan frekuensi dan proteksi."
+  },
+  HIGH_RISK: {
+    title: "High Risk",
+    classification: "Risiko tinggi",
+    summary: "Exposure dan frekuensi lebih besar, tetapi tetap tunduk pada hard guard.",
+    bestFor: "Akun yang siap menerima drawdown lebih besar dan dipantau aktif."
+  }
+};
+
+function applyStrategyProfile(settings: StrategyRiskSettings, profile: Exclude<StrategyProfile, "CUSTOM">): StrategyRiskSettings {
+  const pairProfiles = {
+    XAUUSD: { ...settings.pairProfiles.XAUUSD },
+    EURUSD: { ...settings.pairProfiles.EURUSD }
+  };
+  if (profile === "CONSERVATIVE") {
+    Object.assign(pairProfiles.XAUUSD, {
+      riskPercent: 0.2, maxLot: 0.05, maxOpenPositions: 2, maxTotalLot: 0.1,
+      maxDailyTrades: 6, maxHourlyTrades: 2, aggregateSlRiskCapPercent: 6,
+      marketRegimeMode: "strict", allowedMarketRegimes: ["TRENDING", "SIDEWAYS"],
+      trendingMinScore: 75, sidewaysMinScore: 82, volatileMinScore: 90
+    });
+    Object.assign(pairProfiles.EURUSD, {
+      riskPercent: 0.15, maxLot: 0.03, maxOpenPositions: 1, maxTotalLot: 0.03,
+      maxDailyTrades: 3, maxHourlyTrades: 1, aggregateSlRiskCapPercent: 3,
+      marketRegimeMode: "strict", allowedMarketRegimes: ["TRENDING"],
+      trendingMinScore: 78, sidewaysMinScore: 85, volatileMinScore: 92
+    });
+    return {
+      ...settings, strategyProfile: profile, pairProfiles, recoveryEnabled: false,
+      minScore: "75", riskMode: "percent_equity", riskValue: "0.2",
+      maxTotalRiskPercent: "6", maxTotalOpenPositionsAllPairs: "4",
+      scanIntervalSeconds: "30", duplicateCooldownMinutes: "30"
+    };
+  }
+  if (profile === "HIGH_RISK") {
+    Object.assign(pairProfiles.XAUUSD, {
+      riskPercent: 0.5, maxLot: 0.1, maxOpenPositions: 5, maxTotalLot: 0.5,
+      maxDailyTrades: 20, maxHourlyTrades: 10, aggregateSlRiskCapPercent: 15,
+      marketRegimeMode: "strict", allowedMarketRegimes: ["TRENDING", "SIDEWAYS", "HIGH_VOLATILITY"],
+      trendingMinScore: 60, sidewaysMinScore: 68, volatileMinScore: 75
+    });
+    Object.assign(pairProfiles.EURUSD, {
+      riskPercent: 0.5, maxLot: 0.1, maxOpenPositions: 2, maxTotalLot: 0.2,
+      maxDailyTrades: 10, maxHourlyTrades: 4, aggregateSlRiskCapPercent: 10,
+      marketRegimeMode: "strict", allowedMarketRegimes: ["TRENDING", "SIDEWAYS", "HIGH_VOLATILITY"],
+      trendingMinScore: 62, sidewaysMinScore: 70, volatileMinScore: 78
+    });
+    return {
+      ...settings, strategyProfile: profile, pairProfiles, recoveryEnabled: true,
+      minScore: "60", riskMode: "percent_equity", riskValue: "0.5",
+      maxTotalRiskPercent: "20", maxTotalOpenPositionsAllPairs: "15",
+      scanIntervalSeconds: "10", duplicateCooldownMinutes: "5"
+    };
+  }
+  Object.assign(pairProfiles.XAUUSD, {
+    riskPercent: 0.35, maxLot: 0.1, maxOpenPositions: 3, maxTotalLot: 0.3,
+    maxDailyTrades: 12, maxHourlyTrades: 4, aggregateSlRiskCapPercent: 10,
+    marketRegimeMode: "advisory", allowedMarketRegimes: ["TRENDING", "SIDEWAYS", "HIGH_VOLATILITY"],
+    trendingMinScore: 65, sidewaysMinScore: 72, volatileMinScore: 82
+  });
+  Object.assign(pairProfiles.EURUSD, {
+    riskPercent: 0.25, maxLot: 0.05, maxOpenPositions: 1, maxTotalLot: 0.05,
+    maxDailyTrades: 5, maxHourlyTrades: 2, aggregateSlRiskCapPercent: 5,
+    marketRegimeMode: "strict", allowedMarketRegimes: ["TRENDING", "SIDEWAYS"],
+    trendingMinScore: 68, sidewaysMinScore: 76, volatileMinScore: 86
+  });
+  return {
+    ...settings, strategyProfile: profile, pairProfiles, recoveryEnabled: false,
+    minScore: "65", riskMode: "percent_equity", riskValue: "0.35",
+    maxTotalRiskPercent: "12", maxTotalOpenPositionsAllPairs: "8",
+    scanIntervalSeconds: "15", duplicateCooldownMinutes: "15"
+  };
+}
+
 function strategySettingsFromAutoMode(autoMode: AutoModeStatus): StrategyRiskSettings {
   return {
     configVersion: autoMode.configVersion ?? 2,
+    strategyProfile: autoMode.strategyProfile ?? "CUSTOM",
     shadowMode: autoMode.shadowMode ?? true,
     enabled: autoMode.enabled,
     accountMode: autoMode.accountMode ?? "USD",
-    pairProfiles: autoMode.pairProfiles ?? defaultStrategyRiskSettings.pairProfiles,
+    pairProfiles: {
+      XAUUSD: { ...defaultStrategyRiskSettings.pairProfiles.XAUUSD, ...(autoMode.pairProfiles?.XAUUSD ?? {}) },
+      EURUSD: { ...defaultStrategyRiskSettings.pairProfiles.EURUSD, ...(autoMode.pairProfiles?.EURUSD ?? {}) }
+    },
     activeSymbols: autoMode.activeSymbols ?? ["XAUUSD", "EURUSD"],
     xauusdHardTpUsd: String(autoMode.hardTakeProfitUsd?.XAUUSD ?? 10),
     eurusdHardTpUsd: String(autoMode.hardTakeProfitUsd?.EURUSD ?? 10),
@@ -706,7 +852,7 @@ function strategySettingsFromAutoMode(autoMode: AutoModeStatus): StrategyRiskSet
 }
 
 function App() {
-  const [activePage, setActivePage] = React.useState<"summary" | "system" | "settings" | "investing">("summary");
+  const [activePage, setActivePage] = React.useState<"summary" | "system" | "settings" | "guide" | "investing">("summary");
   const [status, setStatus] = React.useState<Status | null>(null);
   const [backendHealth, setBackendHealth] = React.useState<BackendHealth | null>(null);
   const [positions, setPositions] = React.useState<OpenPosition[]>([]);
@@ -716,6 +862,7 @@ function App() {
   const [recoveryStatus, setRecoveryStatus] = React.useState<RecoveryEngineStatus | null>(null);
   const [ticks, setTicks] = React.useState<Partial<Record<SymbolName, MarketTick>>>({});
   const [confluenceScores, setConfluenceScores] = React.useState<ConfluenceScoreCard[]>([]);
+  const [marketRegimes, setMarketRegimes] = React.useState<MarketRegimeAssessment[]>([]);
   const [strategySettings, setStrategySettings] = React.useState<StrategyRiskSettings>(defaultStrategyRiskSettings);
   const [investingStatus, setInvestingStatus] = React.useState<InvestingDataSync | null>(null);
   const [investingStatuses, setInvestingStatuses] = React.useState<Partial<Record<SymbolName, InvestingDataSync>>>({});
@@ -751,7 +898,7 @@ function App() {
   }, [strategySettings.riskMode, strategySettings.riskValue]);
 
   const refresh = React.useCallback(async () => {
-    const [nextStatus, nextPositions, nextJournal, nextAutoMode, nextAutoTrailing, nextRecoveryStatus, nextTicks, nextBackendHealth, nextInvestingStatus, nextInvestingTechnical, nextSignalLog, nextSignalAudit, nextPairState, nextCalendar] = await Promise.all([
+    const [nextStatus, nextPositions, nextJournal, nextAutoMode, nextAutoTrailing, nextRecoveryStatus, nextTicks, nextBackendHealth, nextInvestingStatus, nextInvestingTechnical, nextSignalLog, nextSignalAudit, nextPairState, nextCalendar, nextMarketRegimes] = await Promise.all([
       fetchJson<Status>(`${API_BASE}/api/status`, { cache: "no-store" }),
       fetchJson<OpenPosition[]>(`${API_BASE}/api/positions`, { cache: "no-store" }),
       fetchJson<TradingJournalEntry[]>(`${API_BASE}/api/journal`, { cache: "no-store" }),
@@ -765,7 +912,8 @@ function App() {
       fetchJson<SignalLogEntry[]>(`${API_BASE}/api/signal-log?limit=100`, { cache: "no-store" }),
       fetchJson<SignalAuditEntry[]>(`${API_BASE}/api/signal-audit?limit=100`, { cache: "no-store" }),
       fetchJson<PairStateResponse>(`${API_BASE}/api/pair-state`, { cache: "no-store" }),
-      fetchJson<EconomicCalendarResponse>(`${API_BASE}/api/economic-calendar`, { cache: "no-store" })
+      fetchJson<EconomicCalendarResponse>(`${API_BASE}/api/economic-calendar`, { cache: "no-store" }),
+      fetchJson<MarketRegimeCollection>(`${API_BASE}/api/market/regimes`, { cache: "no-store" })
     ]);
     setStatus(nextStatus);
     setPositions(nextPositions);
@@ -784,6 +932,7 @@ function App() {
     setSignalAudit(nextSignalAudit);
     setPairState(nextPairState);
     setCalendar(nextCalendar);
+    setMarketRegimes(nextMarketRegimes.items ?? []);
   }, []);
 
   React.useEffect(() => {
@@ -883,6 +1032,7 @@ function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         configVersion: 2,
+        strategyProfile: nextSettings.strategyProfile,
         shadowMode: nextSettings.shadowMode,
         enabled: nextSettings.enabled,
         accountMode: nextSettings.accountMode,
@@ -967,6 +1117,7 @@ function App() {
           <button className={activePage === "summary" ? "active" : ""} onClick={() => setActivePage("summary")}>Summary</button>
           <button className={activePage === "system" ? "active" : ""} onClick={() => setActivePage("system")}>Strategy System</button>
           <button className={activePage === "settings" ? "active" : ""} onClick={() => setActivePage("settings")}>Settings</button>
+          <button className={activePage === "guide" ? "active" : ""} onClick={() => setActivePage("guide")}>Penjelasan Setting</button>
           <button className={activePage === "investing" ? "active" : ""} onClick={() => setActivePage("investing")}>Investing</button>
         </nav>
         <div className="summary-status-row">
@@ -990,11 +1141,13 @@ function App() {
           calendar={calendar}
           signalLog={signalLog}
           signalAudit={signalAudit}
+          marketRegimes={marketRegimes}
         />
       ) : activePage === "settings" ? (
         <StrategySettingsPage
           settings={strategySettings}
           autoMode={autoMode}
+          marketRegimes={marketRegimes}
           settingsDirty={settingsDirty}
           onChange={updateStrategySettings}
           onSave={() => saveStrategySettings().catch((error) => setToast(error.message))}
@@ -1007,6 +1160,8 @@ function App() {
             }
           }}
         />
+      ) : activePage === "guide" ? (
+        <SettingsExplanationPage />
       ) : activePage === "investing" ? (
         <InvestingDataPage statuses={investingStatuses} technicals={investingTechnicals} onSync={syncInvestingNow} />
       ) : (
@@ -1447,7 +1602,8 @@ function StrategySystemPage({
   pairState,
   calendar,
   signalLog,
-  signalAudit
+  signalAudit,
+  marketRegimes
 }: {
   status: Status | null;
   backendHealth: BackendHealth | null;
@@ -1460,6 +1616,7 @@ function StrategySystemPage({
   calendar: EconomicCalendarResponse | null;
   signalLog: SignalLogEntry[];
   signalAudit: SignalAuditEntry[];
+  marketRegimes: MarketRegimeAssessment[];
 }) {
   const rows = React.useMemo<ParameterCheckRow[]>(() => {
     const checks: ParameterCheckRow[] = [
@@ -1566,6 +1723,8 @@ function StrategySystemPage({
       const exposure = autoMode?.pairExposure?.find((item) => item.symbol === symbol);
       const state = pairState?.states?.[symbol];
       const investing = investingStatuses[symbol];
+      const executionRegimes = marketRegimes.filter((item) => item.symbol === symbol && profile?.executionTimeframes.includes(item.timeframe));
+      const primaryRegime = executionRegimes.find((item) => item.timeframe === "H1") ?? executionRegimes[0];
       if (!profile) return;
       checks.push(
         {
@@ -1643,10 +1802,14 @@ function StrategySystemPage({
         {
           group: symbol,
           parameter: "Market regime",
-          value: symbol === "EURUSD" ? "Strict block" : "Advisory",
-          expected: "Trend/range/choppy/volatility classification",
-          status: "PASS",
-          detail: symbol === "EURUSD" ? "CHOPPY, HARD_CHOPPY, low volatility, and news shock block entry" : "Regime does not alter existing XAU strategy by default"
+          value: primaryRegime ? `${primaryRegime.regime} ${primaryRegime.confidence}%` : "Unavailable",
+          expected: `${profile.marketRegimeMode}; ${profile.allowedMarketRegimes.join(", ")}`,
+          status: !primaryRegime
+            ? "WARNING"
+            : profile.marketRegimeMode === "strict" && !profile.allowedMarketRegimes.includes(primaryRegime.regime)
+              ? "BLOCKED"
+              : profile.marketRegimeMode === "disabled" ? "OFF" : "PASS",
+          detail: primaryRegime?.approach ?? "Market regime data unavailable"
         },
         {
           group: symbol,
@@ -1675,7 +1838,7 @@ function StrategySystemPage({
       );
     });
     return checks;
-  }, [autoMode, autoTrailing, backendHealth, calendar, investingStatuses, pairState, recoveryStatus, status]);
+  }, [autoMode, autoTrailing, backendHealth, calendar, investingStatuses, marketRegimes, pairState, recoveryStatus, status]);
 
   const blockedCount = rows.filter((row) => row.status === "BLOCKED").length;
   const warningCount = rows.filter((row) => row.status === "WARNING").length;
@@ -1747,6 +1910,16 @@ function StrategySystemPage({
         </div>
       </section>
 
+      <section className="summary-table-card parameter-table-card">
+        <div className="summary-section-heading compact">
+          <div><span className="panel-title">Market condition matrix</span><h2>Regime by pair and timeframe</h2></div>
+          <span>Execution: M15, M30, H1</span>
+        </div>
+        <div className="market-regime-grid">
+          {marketRegimes.map((item) => <MarketRegimeCard key={`${item.symbol}-${item.timeframe}`} item={item} />)}
+        </div>
+      </section>
+
       <section className="summary-table-card">
         <div className="summary-section-heading compact">
           <div><span className="panel-title">Signal logger</span><h2>Latest potential signals</h2></div>
@@ -1799,6 +1972,23 @@ function CheckStatus({ value }: { value: CheckTone }) {
   return <span className={`parameter-status ${value.toLowerCase()}`}>{value}</span>;
 }
 
+function MarketRegimeCard({ item }: { item: MarketRegimeAssessment }) {
+  return (
+    <article className={`market-regime-card ${marketRegimeTone(item.regime)}`}>
+      <div>
+        <strong>{item.symbol} · {item.timeframe}</strong>
+        <span>{item.regime.replace(/_/g, " ")}</span>
+      </div>
+      <div className="market-regime-confidence">
+        <span>Confidence</span>
+        <strong>{item.confidence}%</strong>
+      </div>
+      <p>{item.approach}</p>
+      <small>Efficiency {item.efficiencyRatio.toFixed(2)} · EMA gap {item.emaGapAtr.toFixed(2)} ATR · Vol {item.atrPercent.toFixed(3)}%</small>
+    </article>
+  );
+}
+
 function exposureTone(value: PairExposureStatus["status"] | undefined): CheckTone {
   if (value === "SAFE") return "PASS";
   if (value === "WARNING") return "WARNING";
@@ -1813,23 +2003,110 @@ function auditTone(value: string | undefined): CheckTone {
   return "INFO";
 }
 
+function SettingsExplanationPage() {
+  return (
+    <section className="settings-guide-page">
+      <header className="settings-guide-header">
+        <span className="panel-title">Panduan konfigurasi</span>
+        <h2>Penjelasan Setting</h2>
+        <p>Gunakan halaman ini untuk memahami dampak setiap profil sebelum mengaktifkan Full Auto.</p>
+      </header>
+
+      <section className="guide-section">
+        <div className="summary-section-heading compact">
+          <div><span className="panel-title">Simple mode</span><h2>Klasifikasi profil trading</h2></div>
+        </div>
+        <div className="guide-profile-grid">
+          {(["CONSERVATIVE", "OPPORTUNISTIC", "HIGH_RISK"] as const).map((profile) => {
+            const detail = strategyProfileDescriptions[profile];
+            return (
+              <article key={profile} className={`guide-profile ${profile.toLowerCase()}`}>
+                <span>{detail.classification}</span>
+                <h3>{detail.title}</h3>
+                <p>{detail.summary}</p>
+                <strong>Cocok untuk</strong>
+                <p>{detail.bestFor}</p>
+                <dl>
+                  <div><dt>Total risk cap</dt><dd>{profile === "CONSERVATIVE" ? "6%" : profile === "OPPORTUNISTIC" ? "12%" : "20%"}</dd></div>
+                  <div><dt>Minimum score</dt><dd>{profile === "CONSERVATIVE" ? "75" : profile === "OPPORTUNISTIC" ? "65" : "60"}</dd></div>
+                  <div><dt>Recovery</dt><dd>{profile === "HIGH_RISK" ? "Aktif" : "Nonaktif"}</dd></div>
+                  <div><dt>Karakter</dt><dd>{profile === "CONSERVATIVE" ? "Selektif" : profile === "OPPORTUNISTIC" ? "Seimbang" : "Agresif"}</dd></div>
+                </dl>
+              </article>
+            );
+          })}
+        </div>
+        <div className="guide-warning">
+          <strong>High Risk bukan berarti tanpa batas.</strong>
+          <span>Profil ini tetap dibatasi maksimum 0.10 lot per posisi, exposure pair, total risk cap, spread, signal expiry, dan market regime.</span>
+        </div>
+      </section>
+
+      <section className="guide-section">
+        <div className="summary-section-heading compact">
+          <div><span className="panel-title">Market condition</span><h2>Cara strategi menyesuaikan pendekatan</h2></div>
+        </div>
+        <div className="guide-condition-grid">
+          <article><strong>Trending</strong><p>Prioritaskan continuation atau pullback searah EMA. Score minimum biasanya lebih rendah karena struktur lebih jelas.</p></article>
+          <article><strong>Sideways</strong><p>Entry diarahkan ke batas support/resistance dengan konfirmasi lebih tinggi dan target lebih pendek.</p></article>
+          <article><strong>High Volatility</strong><p>Butuh score lebih tinggi. Ukuran posisi tetap dibatasi karena pergerakan dan stop dapat melebar.</p></article>
+          <article><strong>Choppy / News Shock</strong><p>Struktur tidak stabil. Mode strict memblokir entry baru sampai kondisi kembali dapat dibaca.</p></article>
+        </div>
+      </section>
+
+      <section className="summary-table-card guide-table-card">
+        <div className="summary-section-heading compact">
+          <div><span className="panel-title">Advanced mode</span><h2>Arti parameter utama</h2></div>
+        </div>
+        <table className="summary-table">
+          <thead><tr><th>Parameter</th><th>Fungsi</th><th>Contoh</th><th>Dampak</th></tr></thead>
+          <tbody>
+            <tr><td>Minimum score</td><td>Kualitas minimum confluence signal</td><td>75</td><td>Signal score 70 tidak boleh entry</td></tr>
+            <tr><td>Risk per trade</td><td>Risiko target satu order terhadap equity</td><td>0.25%</td><td>Lot dihitung agar loss ke SL sesuai batas</td></tr>
+            <tr><td>Total risk cap</td><td>Batas akumulasi seluruh exposure ke SL</td><td>12%</td><td>Order baru ditolak jika total proyeksi melewati 12%</td></tr>
+            <tr><td>Maximum open positions</td><td>Batas posisi aktif per pair</td><td>XAUUSD 3</td><td>Posisi keempat diblokir</td></tr>
+            <tr><td>Hard TP</td><td>Close posisi saat profit nominal tercapai</td><td>XAUUSD $10</td><td>Monitor mencoba close segera saat floating profit minimal $10</td></tr>
+            <tr><td>Regime enforcement</td><td>Menentukan apakah kondisi pasar hanya warning atau hard block</td><td>Strict</td><td>Choppy tidak dapat membuka entry jika tidak diizinkan</td></tr>
+            <tr><td>Shadow Mode</td><td>Menguji keputusan tanpa mengirim order</td><td>ON</td><td>Signal dan alasan tetap tercatat di audit</td></tr>
+            <tr><td>Recovery</td><td>Hedge terbatas saat reversal tervalidasi</td><td>High Risk ON</td><td>Tetap tunduk pada lot cap dan basket loss cap</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section className="guide-section guide-example">
+        <span className="panel-title">Contoh keputusan</span>
+        <h2>Signal XAUUSD score 72 pada pasar sideways</h2>
+        <div>
+          <p><strong>Conservative:</strong> tidak entry karena minimum global 75 dan sideways membutuhkan score 82.</p>
+          <p><strong>Opportunistic:</strong> dapat dipertimbangkan karena minimum global 65 dan sideways membutuhkan score 72, selama guard lain lolos.</p>
+          <p><strong>High Risk:</strong> dapat dipertimbangkan mulai score 68, tetapi tetap ditolak jika exposure, spread, posisi, atau signal expiry bermasalah.</p>
+        </div>
+      </section>
+    </section>
+  );
+}
+
 function StrategySettingsPage({
   settings,
   autoMode,
+  marketRegimes,
   settingsDirty,
-  onChange,
+  onChange: onSettingsChange,
   onSave,
   onReset
 }: {
   settings: StrategyRiskSettings;
   autoMode: AutoModeStatus | null;
+  marketRegimes: MarketRegimeAssessment[];
   settingsDirty: boolean;
   onChange: (patch: Partial<StrategyRiskSettings>) => void;
   onSave: () => void;
   onReset: () => void;
 }) {
   const exposure = autoMode?.exposure;
+  const [settingsView, setSettingsView] = React.useState<"simple" | "advanced">("simple");
   const [activeSection, setActiveSection] = React.useState<"general" | "pairs" | "exits" | "recovery">("general");
+  const onChange = (patch: Partial<StrategyRiskSettings>) => onSettingsChange({ ...patch, strategyProfile: "CUSTOM" });
   const updatePairProfile = (symbol: SymbolName, patch: Partial<PairProfile>) => {
     onChange({
       pairProfiles: {
@@ -1838,6 +2115,117 @@ function StrategySettingsPage({
       }
     });
   };
+  if (settingsView === "simple") {
+    const selectedProfile = settings.strategyProfile === "CUSTOM" ? null : settings.strategyProfile;
+    return (
+      <section className="settings-page">
+        <div className="settings-page-header">
+          <div>
+            <span className="panel-title">Simple settings</span>
+            <h2>Pilih pendekatan trading</h2>
+            <p>Pilih profil, pair aktif, dan mode eksekusi. Detail teknis akan diterapkan otomatis.</p>
+          </div>
+          <div className="settings-header-status">
+            <span className={settings.enabled ? "settings-state on" : "settings-state off"}>AUTO {settings.enabled ? "ON" : "OFF"}</span>
+            <span className={settingsDirty ? "settings-state warning" : "settings-state on"}>{settingsDirty ? "UNSAVED" : "SYNCED"}</span>
+          </div>
+        </div>
+
+        <div className="settings-view-switch" role="group" aria-label="Settings complexity">
+          <button className="active" onClick={() => setSettingsView("simple")}>Simple</button>
+          <button onClick={() => setSettingsView("advanced")}>Advanced</button>
+        </div>
+
+        {settings.strategyProfile === "CUSTOM" && (
+          <div className="settings-custom-notice">
+            <strong>Konfigurasi Custom</strong>
+            <span>Parameter pernah diubah melalui Advanced. Pilih salah satu profil untuk menerapkan preset lengkap.</span>
+          </div>
+        )}
+
+        <div className="simple-profile-grid">
+          {(["CONSERVATIVE", "OPPORTUNISTIC", "HIGH_RISK"] as const).map((profile) => {
+            const detail = strategyProfileDescriptions[profile];
+            return (
+              <button
+                key={profile}
+                className={selectedProfile === profile ? `simple-profile-card active ${profile.toLowerCase()}` : `simple-profile-card ${profile.toLowerCase()}`}
+                onClick={() => onSettingsChange(applyStrategyProfile(settings, profile))}
+              >
+                <span>{detail.classification}</span>
+                <strong>{detail.title}</strong>
+                <p>{detail.summary}</p>
+                <small>{detail.bestFor}</small>
+                <div>
+                  <b>Risk cap {profile === "CONSERVATIVE" ? "6%" : profile === "OPPORTUNISTIC" ? "12%" : "20%"}</b>
+                  <b>Min score {profile === "CONSERVATIVE" ? "75" : profile === "OPPORTUNISTIC" ? "65" : "60"}</b>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        <section className="settings-card simple-essential-card">
+          <div className="settings-card-heading">
+            <div><strong>Kontrol utama</strong><small>Pengaturan yang paling sering digunakan.</small></div>
+            <span className="settings-state on">{selectedProfile ? strategyProfileDescriptions[selectedProfile].title : "Custom"}</span>
+          </div>
+          <div className="settings-switch-list">
+            <label className="settings-switch">
+              <span><strong>Full Auto</strong><small>Engine memindai dan mengeksekusi entry yang lolos seluruh guard.</small></span>
+              <input type="checkbox" checked={settings.enabled} onChange={(event) => onSettingsChange({ enabled: event.target.checked })} />
+            </label>
+            <label className="settings-switch">
+              <span><strong>Shadow Mode</strong><small>Analisis dan log aktif, tetapi order baru tidak dikirim.</small></span>
+              <input type="checkbox" checked={settings.shadowMode} onChange={(event) => onSettingsChange({ shadowMode: event.target.checked })} />
+            </label>
+          </div>
+          <div className="settings-field">
+            <span>Pair yang boleh trading</span>
+            <div className="pair-toggle-grid">
+              {symbols.map((symbol) => (
+                <label key={symbol} className={settings.activeSymbols.includes(symbol) ? "pair-toggle active" : "pair-toggle"}>
+                  <input
+                    type="checkbox"
+                    checked={settings.activeSymbols.includes(symbol)}
+                    onChange={(event) => onSettingsChange({
+                      activeSymbols: event.target.checked
+                        ? Array.from(new Set([...settings.activeSymbols, symbol]))
+                        : settings.activeSymbols.filter((item) => item !== symbol)
+                    })}
+                  />
+                  <span>{symbol}</span>
+                  <small>{settings.activeSymbols.includes(symbol) ? "Trading aktif" : "Tidak membuka entry"}</small>
+                </label>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="settings-card">
+          <div className="settings-card-heading">
+            <div><strong>Kondisi pasar saat ini</strong><small>Profil tetap tunduk pada market regime dan exposure guard.</small></div>
+          </div>
+          <div className="market-regime-grid simple-regime-grid">
+            {marketRegimes.filter((item) => item.timeframe === "H1").map((item) => <MarketRegimeCard key={`${item.symbol}-${item.timeframe}`} item={item} />)}
+          </div>
+          <div className="settings-risk-preview">
+            <Metric label="Total risk cap" value={formatPercent(positiveNumber(settings.maxTotalRiskPercent, 20))} />
+            <Metric label="Minimum score" value={settings.minScore} />
+            <Metric label="Maximum positions" value={settings.maxTotalOpenPositionsAllPairs} />
+          </div>
+        </section>
+
+        <div className="settings-actions settings-actions-sticky">
+          <div><strong>{settingsDirty ? "Perubahan belum disimpan" : "Settings tersinkronisasi"}</strong><small>Preset baru aktif setelah Save settings.</small></div>
+          <div>
+            <button className="settings-secondary" onClick={onReset} disabled={!settingsDirty}>Batalkan</button>
+            <button className="summary-refresh" onClick={onSave} disabled={!settingsDirty}>Simpan settings</button>
+          </div>
+        </div>
+      </section>
+    );
+  }
   return (
     <section className="settings-page">
       <div className="settings-page-header">
@@ -1851,6 +2239,11 @@ function StrategySettingsPage({
           <span className={settings.shadowMode ? "settings-state warning" : "settings-state on"}>{settings.shadowMode ? "SHADOW" : "LIVE EXECUTION"}</span>
           <span className={settingsDirty ? "settings-state warning" : "settings-state on"}>{settingsDirty ? "UNSAVED" : "SYNCED"}</span>
         </div>
+      </div>
+
+      <div className="settings-view-switch" role="group" aria-label="Settings complexity">
+        <button onClick={() => setSettingsView("simple")}>Simple</button>
+        <button className="active" onClick={() => setSettingsView("advanced")}>Advanced</button>
       </div>
 
       <nav className="settings-section-nav" aria-label="Settings categories">
@@ -1996,6 +2389,7 @@ function StrategySettingsPage({
               symbol={symbol}
               profile={settings.pairProfiles[symbol]}
               exposure={autoMode?.pairExposure?.find((item) => item.symbol === symbol) ?? null}
+              regimes={marketRegimes.filter((item) => item.symbol === symbol)}
               onChange={(patch) => updatePairProfile(symbol, patch)}
             />
           ))}
@@ -2138,13 +2532,16 @@ function PairProfileCard({
   symbol,
   profile,
   exposure,
+  regimes,
   onChange
 }: {
   symbol: SymbolName;
   profile: PairProfile;
   exposure: PairExposureStatus | null;
+  regimes: MarketRegimeAssessment[];
   onChange: (patch: Partial<PairProfile>) => void;
 }) {
+  const allowedMarketRegimes = profile.allowedMarketRegimes ?? [];
   return (
     <section className="settings-card pair-profile-card">
       <div className="pair-profile-heading">
@@ -2164,6 +2561,52 @@ function PairProfileCard({
         <Metric label="Total lot" value={`${(exposure?.totalLot ?? 0).toFixed(2)} / ${profile.maxTotalLot.toFixed(2)}`} />
         <Metric label="SL exposure" value={`${(exposure?.aggregateSlRiskPercent ?? 0).toFixed(2)}% / ${profile.aggregateSlRiskCapPercent}%`} />
         <Metric label="Floating P/L" value={formatMoney(exposure?.floatingPnlAccount ?? 0)} />
+      </div>
+
+      <div className="pair-profile-section">
+        <div className="pair-profile-section-heading"><strong>Market condition policy</strong><small>Sesuaikan entry dengan regime yang terdeteksi.</small></div>
+        <div className="market-regime-live-strip">
+          {regimes.filter((item) => profile.executionTimeframes.includes(item.timeframe)).map((item) => (
+            <div key={`${symbol}-${item.timeframe}`} className={marketRegimeTone(item.regime)}>
+              <span>{item.timeframe}</span>
+              <strong>{item.regime.replace(/_/g, " ")}</strong>
+              <small>{item.confidence}% confidence</small>
+            </div>
+          ))}
+        </div>
+        <div className="settings-form-grid">
+          <label className="settings-field">
+            <span>Regime enforcement</span>
+            <select value={profile.marketRegimeMode} onChange={(event) => onChange({ marketRegimeMode: event.target.value as PairProfile["marketRegimeMode"] })}>
+              <option value="advisory">Advisory only</option>
+              <option value="strict">Strict block</option>
+              <option value="disabled">Disabled</option>
+            </select>
+          </label>
+          <CompactNumber label="Trending minimum score" value={profile.trendingMinScore} min={0} max={100} step={1} suffix="score" onChange={(value) => onChange({ trendingMinScore: value })} />
+          <CompactNumber label="Sideways minimum score" value={profile.sidewaysMinScore} min={0} max={100} step={1} suffix="score" onChange={(value) => onChange({ sidewaysMinScore: value })} />
+          <CompactNumber label="Volatile minimum score" value={profile.volatileMinScore} min={0} max={100} step={1} suffix="score" onChange={(value) => onChange({ volatileMinScore: value })} />
+        </div>
+        <div className="market-regime-options">
+          {configurableMarketRegimes.map((regime) => {
+            const active = allowedMarketRegimes.includes(regime);
+            return (
+              <label key={regime} className={active ? "active" : ""}>
+                <input
+                  type="checkbox"
+                  checked={active}
+                  onChange={(event) => onChange({
+                    allowedMarketRegimes: event.target.checked
+                      ? Array.from(new Set([...allowedMarketRegimes, regime]))
+                      : allowedMarketRegimes.filter((item) => item !== regime)
+                  })}
+                />
+                <span>{regime.replace(/_/g, " ")}</span>
+              </label>
+            );
+          })}
+        </div>
+        <p className="settings-help">Strict memblokir regime yang tidak dipilih dan menerapkan minimum score sesuai kondisi. Advisory hanya mencatat warning.</p>
       </div>
 
       <div className="pair-profile-section">
@@ -4069,6 +4512,14 @@ function findNearestZone(price: number, zones: Snapshot["zones"]) {
 
 function capitalize(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function marketRegimeTone(regime: MarketRegime) {
+  if (regime === "TRENDING") return "trending";
+  if (regime === "SIDEWAYS" || regime === "LOW_VOLATILITY") return "sideways";
+  if (regime === "HIGH_VOLATILITY") return "volatile";
+  if (regime === "CHOPPY" || regime === "HARD_CHOPPY" || regime === "NEWS_SHOCK") return "blocked";
+  return "uncertain";
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

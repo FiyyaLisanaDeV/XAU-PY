@@ -13,6 +13,7 @@ from .models import (
     PairProfile,
     PairState,
     PendingOrder,
+    MarketRegimeAssessment,
     Side,
     Symbol,
 )
@@ -189,16 +190,33 @@ def build_pair_exposure(
     )
 
 
-def classify_market_regime(candles: list[Candle], pivot: float | None = None) -> tuple[str, int]:
+def classify_market_regime(
+    candles: list[Candle],
+    pivot: float | None = None,
+    symbol: Symbol = "XAUUSD",
+    timeframe: str = "H1",
+) -> MarketRegimeAssessment:
     closed = candles[:-1] if len(candles) > 1 else candles
     sample = closed[-20:]
     if len(sample) < 20:
-        return "UNKNOWN", 0
+        return MarketRegimeAssessment(
+            symbol=symbol,
+            timeframe=timeframe,
+            regime="UNCERTAIN",
+            confidence=0,
+            approach="Tunggu minimal 20 candle selesai sebelum mengambil keputusan",
+            choppyScore=0,
+            efficiencyRatio=0,
+            emaGapAtr=0,
+            atrPercent=0,
+        )
     ranges = [max(item.high - item.low, 1e-9) for item in sample]
     bodies = [abs(item.close - item.open) for item in sample]
     atr = sum(ranges) / len(ranges)
+    atr_percent = atr / max(abs(sample[-1].close), 1e-9) * 100
     fast = ema([item.close for item in closed], 21)
     slow = ema([item.close for item in closed], 55)
+    ema_gap_atr = abs(fast[-1] - slow[-1]) / max(atr, 1e-9)
     score = 0
     if abs(fast[-1] - slow[-1]) < 0.35 * atr:
         score += 1
@@ -223,17 +241,36 @@ def classify_market_regime(candles: list[Candle], pivot: float | None = None) ->
     if median(wick_ratios) > 0.60:
         score += 1
     latest_range = ranges[-1]
+    regime = "SIDEWAYS"
+    confidence = 55
+    approach = "Gunakan batas range, target lebih dekat, dan konfirmasi lebih kuat"
     if latest_range >= atr * 2.5:
-        return "NEWS_SHOCK", score
-    if atr <= max(abs(sample[-1].close) * 0.00008, 1e-8):
-        return "LOW_VOLATILITY", score
-    if score >= 4:
-        return "HARD_CHOPPY", score
-    if score >= 3:
-        return "CHOPPY", score
-    if efficiency >= 0.55:
-        return "TRENDING", score
-    return "RANGING", score
+        regime, confidence, approach = "NEWS_SHOCK", 95, "Blokir entry baru sampai volatilitas kembali normal"
+    elif atr <= max(abs(sample[-1].close) * 0.00008, 1e-8):
+        regime, confidence, approach = "LOW_VOLATILITY", 80, "Tunggu ekspansi atau entry hanya pada batas range terkonfirmasi"
+    elif score >= 4:
+        regime, confidence, approach = "HARD_CHOPPY", min(98, 70 + score * 5), "Blokir entry baru karena struktur tidak stabil"
+    elif score >= 3:
+        regime, confidence, approach = "CHOPPY", min(90, 65 + score * 5), "Kurangi aktivitas dan wajibkan konfirmasi sangat kuat"
+    elif efficiency >= 0.55 and ema_gap_atr >= 0.35:
+        regime, confidence, approach = "TRENDING", min(95, round(60 + efficiency * 35)), "Prioritaskan pullback continuation searah tren"
+    elif atr_percent >= (0.35 if symbol == "XAUUSD" else 0.12):
+        regime, confidence, approach = "HIGH_VOLATILITY", 75, "Kurangi ukuran, gunakan stop struktural, dan wajibkan score lebih tinggi"
+    elif efficiency < 0.45:
+        regime, confidence, approach = "SIDEWAYS", min(90, round(65 + (0.45 - efficiency) * 50)), "Gunakan batas range, target lebih dekat, dan konfirmasi lebih kuat"
+    else:
+        regime, confidence, approach = "UNCERTAIN", 45, "Tunggu struktur pasar yang lebih jelas"
+    return MarketRegimeAssessment(
+        symbol=symbol,
+        timeframe=timeframe,
+        regime=regime,
+        confidence=confidence,
+        approach=approach,
+        choppyScore=score,
+        efficiencyRatio=round(efficiency, 4),
+        emaGapAtr=round(ema_gap_atr, 4),
+        atrPercent=round(atr_percent, 5),
+    )
 
 
 def evaluate_pair_gate(
@@ -268,18 +305,26 @@ def evaluate_pair_gate(
 
     pivot_values = investing_technical.get("pivot_points", {})
     pivot = value_of(pivot_values.get("PIVOT"))
-    regime, _score = classify_market_regime(candles, pivot)
-    if signal.symbol == "EURUSD":
-        if regime == "HARD_CHOPPY":
-            reasons.append("EURUSD blocked: hard choppy market regime")
-        elif regime == "CHOPPY":
-            reasons.append("EURUSD blocked: choppy market regime")
-        elif regime == "LOW_VOLATILITY":
-            reasons.append("EURUSD blocked: low volatility range")
-        elif regime == "NEWS_SHOCK":
-            reasons.append("EURUSD blocked: high volatility news shock")
-    elif regime in {"CHOPPY", "HARD_CHOPPY", "NEWS_SHOCK"}:
-        warnings.append(f"XAUUSD advisory: {regime.lower().replace('_', ' ')}")
+    assessment = classify_market_regime(candles, pivot, signal.symbol, signal.timeframe)
+    regime = assessment.regime
+    if profile.marketRegimeMode != "disabled":
+        allowed = regime in profile.allowedMarketRegimes
+        required_score = (
+            profile.trendingMinScore
+            if regime == "TRENDING"
+            else profile.sidewaysMinScore
+            if regime in {"SIDEWAYS", "LOW_VOLATILITY", "UNCERTAIN"}
+            else profile.volatileMinScore
+        )
+        regime_messages: list[str] = []
+        if not allowed:
+            regime_messages.append(f"{signal.symbol} blocked: {regime.lower().replace('_', ' ')} market regime is not enabled")
+        if signal.score < required_score:
+            regime_messages.append(f"{signal.symbol} blocked: {regime} requires score >= {required_score}")
+        if profile.marketRegimeMode == "strict":
+            reasons.extend(regime_messages)
+        else:
+            warnings.extend(item.replace("blocked", "advisory") for item in regime_messages)
 
     closed = candles[-2] if len(candles) >= 2 else None
     if closed is None:

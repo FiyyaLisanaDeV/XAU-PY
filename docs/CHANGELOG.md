@@ -4,6 +4,11 @@
 
 ### Added
 
+- Added Simple and Advanced Settings modes, including Conservative, Opportunistic, High Risk, and Custom configuration classification.
+- Added backend-authoritative profile normalization so Simple-mode presets cannot drift from their documented risk and strategy limits.
+- Added an Indonesian `Penjelasan Setting` page with profile guidance, market-condition behavior, parameter definitions, and decision examples.
+- Added live market-regime classification for trending, sideways, choppy, low/high volatility, news shock, and uncertain conditions across every pair and timeframe.
+- Added configurable per-pair regime enforcement, allowed conditions, and separate confluence thresholds for trending, sideways, and volatile markets.
 - Redesigned the Settings page into focused General, Pair Profiles, Exit & Trailing, and Recovery workspaces with live context, clearer switches, exposure summaries, and a sticky save state.
 - Added the AFPL v8 license, copyright notice, AI usage policy, repository agent policy, package license metadata, and an in-app copyright footer.
 - Added a live `Strategy System` parameter-check page covering runtime health, pair profiles, strategy components, risk limits, exposure, pair state, market data, confluence, signal logger, and decision audit.

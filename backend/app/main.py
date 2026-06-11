@@ -39,6 +39,7 @@ from .models import (
     ExecuteOrderResponse,
     HistoryItem,
     MarketSnapshot,
+    MarketRegimeCollection,
     MarketTick,
     MinimumBalanceEstimate,
     MinimumBalancePair,
@@ -76,12 +77,13 @@ from .investing_sync import (
     refresh_investing_data,
 )
 from .mt5_bridge import MT5Bridge
-from .pair_engine import apply_pair_risk_model, build_pair_exposure, evaluate_pair_gate
+from .pair_engine import apply_pair_risk_model, build_pair_exposure, classify_market_regime, evaluate_pair_gate
 from .pair_state import PairStateStore
 from .risk import MAX_RISK_PERCENT, MIN_LOT, build_risk_exposure, risk_usd_for, round_down_lot, validate_order
 from .recovery import atr_price, recovery_confirmed, reversal_score
 from .signal_logger import SIGNAL_LOG_PATH, read_signal_log, record_potential_signal
 from .strategy import MAX_SPREAD, build_snapshot, recommend
+from .strategy_profiles import apply_strategy_profile
 
 
 @asynccontextmanager
@@ -160,6 +162,9 @@ def load_strategy_settings() -> AutoModeRequest:
         return config
     try:
         raw = json.loads(STRATEGY_SETTINGS_PATH.read_text(encoding="utf-8"))
+        if "strategyProfile" not in raw:
+            raw["strategyProfile"] = "CUSTOM"
+            write_json_atomic(STRATEGY_SETTINGS_PATH, raw)
         if int(raw.get("configVersion", 1)) < 2:
             SETTINGS_V2_BACKUP_PATH.write_text(json.dumps(raw, indent=2), encoding="utf-8")
             raw["configVersion"] = 2
@@ -348,6 +353,7 @@ def ea_status():
         "accountMode": auto_config.accountMode,
         "accountMoneyFactor": account_money_factor(),
         "configVersion": auto_config.configVersion,
+        "strategyProfile": auto_config.strategyProfile,
         "shadowMode": auto_config.shadowMode,
         "pairStateHealthy": not pair_state_store.corrupt,
         "maxTotalRiskPercent": auto_config.maxTotalRiskPercent,
@@ -361,6 +367,8 @@ def ea_status():
         "availableSymbols": list(SCAN_SYMBOLS),
         "executionTimeframes": list(EXECUTION_TIMEFRAMES),
         "monitorTimeframes": [timeframe for timeframe in SCAN_TIMEFRAMES if timeframe not in EXECUTION_TIMEFRAMES],
+        "eaChartTimeframeIndependent": True,
+        "executionOwner": "FastAPI backend via MT5 Python bridge",
         "lastScan": auto_last_scan,
         "lastAction": auto_last_action,
         "blockedReason": auto_blocked_reason,
@@ -543,6 +551,7 @@ def set_auto_mode(request: AutoModeRequest):
         save_recovery_cycles()
     if not request.activeSymbols:
         request.activeSymbols = list(SCAN_SYMBOLS)
+    request = apply_strategy_profile(request)
     auto_config = request
     write_json_atomic(STRATEGY_SETTINGS_PATH, auto_config.model_dump(mode="json"))
     auto_last_action = "Full Auto ON" if request.enabled else "Full Auto OFF"
@@ -580,6 +589,23 @@ def market_ticks():
             source="mt5" if broker_symbol else "mock",
         )
     return ticks
+
+
+@app.get("/api/market/regimes", response_model=MarketRegimeCollection)
+def market_regimes():
+    items = []
+    for symbol in SCAN_SYMBOLS:
+        technical = investing_current_technical(symbol)
+        pivot = None
+        pivot_raw = technical.get("pivot_points", {}).get("PIVOT")
+        if isinstance(pivot_raw, dict):
+            pivot = pivot_raw.get("value")
+        elif isinstance(pivot_raw, (int, float)):
+            pivot = float(pivot_raw)
+        for timeframe in SCAN_TIMEFRAMES:
+            candles = bridge.fetch_candles(symbol, timeframe)
+            items.append(classify_market_regime(candles, pivot, symbol, timeframe))
+    return MarketRegimeCollection(generatedAt=datetime.now(timezone.utc).isoformat(), items=items)
 
 
 @app.get("/api/pending-orders", response_model=list[PendingOrder])
@@ -902,6 +928,7 @@ def build_auto_status(exposure: RiskExposure | None = None) -> AutoModeStatus:
         )
     return AutoModeStatus(
         configVersion=auto_config.configVersion,
+        strategyProfile=auto_config.strategyProfile,
         shadowMode=auto_config.shadowMode,
         enabled=auto_config.enabled,
         accountMode=auto_config.accountMode,
