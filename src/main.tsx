@@ -962,11 +962,15 @@ function App() {
   const pairRows = React.useMemo(() => buildPairRows(journal), [journal]);
   const dailyTarget = (status?.balance ?? status?.equity ?? 0) * 0.1;
   const dailyProgress = dailyTarget > 0 ? Math.min(Math.max((summary.dailyPnl / dailyTarget) * 100, 0), 100) : 0;
+  const winningPositions = positions.filter((position) => position.profit > 0);
+  const losingPositions = positions.filter((position) => position.profit < 0);
+  const winningFloatingPnl = winningPositions.reduce((sum, position) => sum + position.profit, 0);
+  const losingFloatingPnl = losingPositions.reduce((sum, position) => sum + position.profit, 0);
 
   async function closePositionGroup(kind: "winning" | "losing") {
     const selected = positions.filter((position) => (
       kind === "winning"
-        ? position.profit >= usdToAccountMoney(autoMode?.hardTakeProfitUsd?.[position.symbol] ?? 10, accountMode)
+        ? position.profit > 0
         : position.profit < 0
     ));
     if (selected.length === 0) {
@@ -1281,14 +1285,38 @@ function App() {
         </div>
       </section>
 
-      <section className="summary-actions">
-        <button className={autoMode?.enabled ? "auto-toggle on" : "auto-toggle off"} onClick={() => toggleAutoMode(!(autoMode?.enabled ?? false))}>
-          Full Auto {autoMode?.enabled ? "ON" : "OFF"}
-        </button>
-        <button className="close-win" onClick={() => closePositionGroup("winning")}>Close winning trades &gt;= $10</button>
-        <button className="close-loss" onClick={() => closePositionGroup("losing")}>Close all losing trades</button>
-        <button className="close-all" onClick={closeAllPositions}>Close all open trades</button>
-        <button className="reset-data" onClick={resetAllData}>Reset all data</button>
+      <section className="trade-operations">
+        <div className="trade-operations-heading">
+          <div>
+            <span className="panel-title">Trade operations</span>
+            <h2>Position controls</h2>
+            <p>Action manual untuk mode auto dan posisi yang sedang terbuka.</p>
+          </div>
+          <button className={autoMode?.enabled ? "auto-control on" : "auto-control off"} onClick={() => toggleAutoMode(!(autoMode?.enabled ?? false))}>
+            <Activity size={17} />
+            <span><small>Full Auto</small><strong>{autoMode?.enabled ? "ON" : "OFF"}</strong></span>
+          </button>
+        </div>
+
+        <div className="trade-operation-grid">
+          <button className="trade-operation close-win" disabled={winningPositions.length === 0} onClick={() => closePositionGroup("winning")}>
+            <TrendingUp size={18} />
+            <span><strong>Close all winning</strong><small>{winningPositions.length} positions · {formatAccountMoney(winningFloatingPnl, accountMode)}</small></span>
+          </button>
+          <button className="trade-operation close-loss" disabled={losingPositions.length === 0} onClick={() => closePositionGroup("losing")}>
+            <AlertTriangle size={18} />
+            <span><strong>Close all losing</strong><small>{losingPositions.length} positions · {formatAccountMoney(losingFloatingPnl, accountMode)}</small></span>
+          </button>
+          <button className="trade-operation close-all" disabled={positions.length === 0} onClick={closeAllPositions}>
+            <XCircle size={18} />
+            <span><strong>Close all positions</strong><small>{positions.length} positions · {formatAccountMoney(summary.floatingPnl, accountMode)}</small></span>
+          </button>
+        </div>
+
+        <div className="trade-data-actions">
+          <div><strong>Dashboard data</strong><small>Reset hanya data lokal. Posisi dan history broker tidak dihapus.</small></div>
+          <button className="reset-data" onClick={resetAllData}>Reset all data</button>
+        </div>
       </section>
 
       <section className="summary-table-card">

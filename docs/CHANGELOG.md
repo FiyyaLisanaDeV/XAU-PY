@@ -4,6 +4,7 @@
 
 ### Added
 
+- Reworked manual trade actions into a dedicated operations panel; `Close all winning` now closes every open position with profit above zero, independent of Hard TP.
 - Rebalanced Summary market and system cards with consistent dimensions, compact metadata, responsive grid behavior, and clearer live-state hierarchy.
 - Replaced the Summary-page Investing sync panel with an active profile, risk limits, H1 market regime, and pair-blocker overview.
 - Refined the main application header into a compact service bar and scrollable primary navigation with clearer connection status and actions.
